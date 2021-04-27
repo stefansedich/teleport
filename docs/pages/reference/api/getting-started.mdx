@@ -7,7 +7,7 @@ description: Getting started with the Teleport API
 
 In this getting started guide we will use the Teleport API Go Client to connect to the Teleport Auth server.
 
-Here are the steps we'll walk through:
+Here are the steps we'll walkthrough:
  1. Create an API user
  2. Generate credentials
  3. Create a Go program to demo the client
@@ -33,7 +33,7 @@ tctl users add api-user --roles=admin
 
 ## 2/3 Generate Client Credentials
 
-Login as the newly created user with `tsh`.
+Log in as the newly created user with `tsh`.
 
 ```bash
 # generate tsh profile
@@ -94,6 +94,6 @@ go run main.go
 
 ## Next Steps
 
-- Read about the [API architecture](./architecture.mdx) for a more in depth look at the API client.
+- Read about the [API architecture](./architecture.mdx) for a more in-depth look at the API client.
 - Visit the `client` package's [pkg.go.dev](https://pkg.go.dev/github.com/gravitational/teleport/api/client) for easy to navigate code oriented documentation.
 - Familiarize yourself with the [admin manual](../../admin-guide.mdx) to make the best use of the API.
