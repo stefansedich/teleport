@@ -26,6 +26,7 @@ import (
 
 	"github.com/gravitational/teleport"
 	"github.com/gravitational/teleport/lib/defaults"
+	"github.com/gravitational/teleport/lib/tlsca"
 
 	"github.com/gravitational/trace"
 	"github.com/jonboulle/clockwork"
@@ -76,6 +77,7 @@ func NewTLSListener(cfg TLSListenerConfig) (*TLSListener, error) {
 		cfg:           cfg,
 		http2Listener: newListener(context, cfg.Listener.Addr()),
 		httpListener:  newListener(context, cfg.Listener.Addr()),
+		dbListener:    newListener(context, cfg.Listener.Addr()),
 		cancel:        cancel,
 		context:       context,
 	}, nil
@@ -90,6 +92,7 @@ type TLSListener struct {
 	cfg           TLSListenerConfig
 	http2Listener *Listener
 	httpListener  *Listener
+	dbListener    *Listener
 	cancel        context.CancelFunc
 	context       context.Context
 	isClosed      int32
@@ -103,6 +106,11 @@ func (l *TLSListener) HTTP2() net.Listener {
 // HTTP returns HTTP listener
 func (l *TLSListener) HTTP() net.Listener {
 	return l.httpListener
+}
+
+// DB returns database access listener.
+func (l *TLSListener) DB() net.Listener {
+	return l.dbListener
 }
 
 // Serve accepts and forwards tls.Conn connections
@@ -171,6 +179,24 @@ func (l *TLSListener) detectAndForward(conn *tls.Conn) {
 			return
 		}
 	case teleport.HTTPNextProtoTLS, "":
+		certs := conn.ConnectionState().PeerCertificates
+		if len(certs) > 0 {
+			identity, err := tlsca.FromSubject(certs[0].Subject, certs[0].NotAfter)
+			if err != nil {
+				l.log.WithError(err).Warn("Failed to decode subject")
+				conn.Close()
+				return
+			}
+			if identity.RouteToDatabase.ServiceName != "" {
+				select {
+				case l.dbListener.connC <- conn:
+					return
+				case <-l.context.Done():
+					conn.Close()
+					return
+				}
+			}
+		}
 		select {
 		case l.httpListener.connC <- conn:
 		case <-l.context.Done():

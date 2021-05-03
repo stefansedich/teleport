@@ -466,12 +466,15 @@ const (
 	ProtocolPostgres = "postgres"
 	// ProtocolMySQL is the MySQL database protocol.
 	ProtocolMySQL = "mysql"
+	// ProtocolMongo is the MongoDB database protocol.
+	ProtocolMongo = "mongo"
 )
 
 // DatabaseProtocols is a list of all supported database protocols.
 var DatabaseProtocols = []string{
 	ProtocolPostgres,
 	ProtocolMySQL,
+	ProtocolMongo,
 }
 
 const (

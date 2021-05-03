@@ -1528,6 +1528,7 @@ func (a *ServerWithRoles) generateUserCerts(ctx context.Context, req proto.UserC
 	return &proto.Certs{
 		SSH: certs.ssh,
 		TLS: certs.tls,
+		DB:  certs.db,
 	}, nil
 }
 

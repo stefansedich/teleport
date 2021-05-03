@@ -33,8 +33,20 @@ type Audit interface {
 	OnSessionStart(ctx context.Context, session *Session, sessionErr error)
 	// OnSessionEnd is called when database session terminates.
 	OnSessionEnd(ctx context.Context, session *Session)
-	// OnQuery is called when a SQL statement is executed.
-	OnQuery(ctx context.Context, session *Session, query string, parameters ...string)
+	// OnQuery is called when a SQL query is executed.
+	OnQuery(ctx context.Context, session *Session, query Query)
+}
+
+// Query combines database query parameters.
+type Query struct {
+	// Query is the SQL query text.
+	Query string
+	// Parameters contains optional prepared statement parameters.
+	Parameters []string
+	// Documents contains MongoDB documents to log.
+	Documents []string
+	// Database is optional database name the query is executed in.
+	Database string
 }
 
 // AuditConfig is the audit events emitter configuration.
@@ -141,7 +153,11 @@ func (a *audit) OnSessionEnd(ctx context.Context, session *Session) {
 }
 
 // OnQuery emits an audit event when a database query is executed.
-func (a *audit) OnQuery(ctx context.Context, session *Session, query string, parameters ...string) {
+func (a *audit) OnQuery(ctx context.Context, session *Session, query Query) {
+	database := session.DatabaseName
+	if query.Database != "" {
+		database = query.Database
+	}
 	a.emitAuditEvent(ctx, &events.DatabaseSessionQuery{
 		Metadata: events.Metadata{
 			Type:        libevents.DatabaseSessionQueryEvent,
@@ -160,11 +176,12 @@ func (a *audit) OnQuery(ctx context.Context, session *Session, query string, par
 			DatabaseService:  session.Server.GetName(),
 			DatabaseProtocol: session.Server.GetProtocol(),
 			DatabaseURI:      session.Server.GetURI(),
-			DatabaseName:     session.DatabaseName,
+			DatabaseName:     database,
 			DatabaseUser:     session.DatabaseUser,
 		},
-		DatabaseQuery:           query,
-		DatabaseQueryParameters: parameters,
+		DatabaseQuery:           query.Query,
+		DatabaseQueryParameters: query.Parameters,
+		DatabaseDocuments:       query.Documents,
 	})
 }
 

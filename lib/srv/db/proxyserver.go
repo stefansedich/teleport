@@ -168,6 +168,50 @@ func (s *ProxyServer) ServeMySQL(listener net.Listener) error {
 	}
 }
 
+// ServeTLS starts accepting database connections that use plain TLS connection.
+func (s *ProxyServer) ServeTLS(listener net.Listener) error {
+	s.log.Debug("Started database TLS proxy.")
+	defer s.log.Debug("Database TLS proxy exited.")
+	for {
+		clientConn, err := listener.Accept()
+		if err != nil {
+			if utils.IsOKNetworkError(err) {
+				return nil
+			}
+			return trace.Wrap(err)
+		}
+		go func() {
+			defer clientConn.Close()
+			err := s.handleConnection(clientConn)
+			if err != nil {
+				s.log.WithError(err).Error("Failed to handle database TLS connection.")
+			}
+		}()
+	}
+}
+
+func (s *ProxyServer) handleConnection(conn net.Conn) error {
+	s.log.Debugf("Accepted MongoDB connection from %v.", conn.RemoteAddr())
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		return trace.BadParameter("expected *tls.Conn, got %T", conn)
+	}
+	ctx, err := s.middleware.WrapContextWithUser(s.closeCtx, tlsConn)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	serviceConn, err := s.Connect(ctx, "", "")
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	defer serviceConn.Close()
+	err = s.Proxy(ctx, tlsConn, serviceConn)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	return nil
+}
+
 // dispatch dispatches the connection to appropriate database proxy.
 func (s *ProxyServer) dispatch(clientConn net.Conn) (common.Proxy, error) {
 	muxConn, ok := clientConn.(*multiplexer.Conn)
@@ -287,8 +331,12 @@ func (s *ProxyServer) authorize(ctx context.Context, user, database string) (*pr
 		return nil, trace.Wrap(err)
 	}
 	identity := authContext.Identity.GetIdentity()
-	identity.RouteToDatabase.Username = user
-	identity.RouteToDatabase.Database = database
+	if user != "" {
+		identity.RouteToDatabase.Username = user
+	}
+	if database != "" {
+		identity.RouteToDatabase.Database = database
+	}
 	cluster, server, err := s.pickDatabaseServer(ctx, identity)
 	if err != nil {
 		return nil, trace.Wrap(err)

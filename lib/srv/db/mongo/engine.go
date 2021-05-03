@@ -14,20 +14,18 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package mysql
+package mongo
 
 import (
 	"context"
+	"crypto/tls"
+	"io"
 	"net"
 
 	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/srv/db/common"
-	"github.com/gravitational/teleport/lib/srv/db/mysql/protocol"
+	"github.com/gravitational/teleport/lib/srv/db/mongo/protocol"
 	"github.com/gravitational/teleport/lib/utils"
-
-	"github.com/siddontang/go-mysql/client"
-	"github.com/siddontang/go-mysql/packet"
-	"github.com/siddontang/go-mysql/server"
 
 	"github.com/gravitational/trace"
 	"github.com/jonboulle/clockwork"
@@ -59,21 +57,12 @@ type Engine struct {
 // middleman between the proxy and the database intercepting and interpreting
 // all messages i.e. doing protocol parsing.
 func (e *Engine) HandleConnection(ctx context.Context, sessionCtx *common.Session, clientConn net.Conn) (err error) {
-	// Make server conn to get access to protocol's WriteOK/WriteError methods.
-	proxyConn := server.Conn{Conn: packet.NewConn(clientConn)}
-	defer func() {
-		if err != nil {
-			if writeErr := proxyConn.WriteError(err); writeErr != nil {
-				e.Log.WithError(writeErr).Debugf("Failed to send error %q to MySQL client.", err)
-			}
-		}
-	}()
 	// Perform authorization checks.
 	err = e.checkAccess(sessionCtx)
 	if err != nil {
 		return trace.Wrap(err)
 	}
-	// Establish connection to the MySQL server.
+	// Establish connection to the MongoDB server.
 	serverConn, err := e.connect(ctx, sessionCtx)
 	if err != nil {
 		return trace.Wrap(err)
@@ -81,15 +70,9 @@ func (e *Engine) HandleConnection(ctx context.Context, sessionCtx *common.Sessio
 	defer func() {
 		err := serverConn.Close()
 		if err != nil {
-			e.Log.WithError(err).Error("Failed to close connection to MySQL server.")
+			e.Log.WithError(err).Error("Failed to close connection to MongoDB server.")
 		}
 	}()
-	// Send back OK packet to indicate auth/connect success. At this point
-	// the original client should consider the connection phase completed.
-	err = proxyConn.WriteOK(nil)
-	if err != nil {
-		return trace.Wrap(err)
-	}
 	e.Audit.OnSessionStart(e.Context, sessionCtx, nil)
 	defer e.Audit.OnSessionEnd(e.Context, sessionCtx)
 	// Copy between the connections.
@@ -118,16 +101,9 @@ func (e *Engine) checkAccess(sessionCtx *common.Session) error {
 		Verified:       sessionCtx.Identity.MFAVerified != "",
 		AlwaysRequired: ap.GetRequireSessionMFA(),
 	}
-	// In MySQL, unlike Postgres, "database" and "schema" are the same thing
-	// and there's no good way to prevent users from performing cross-database
-	// queries once they're connected, apart from granting proper privileges
-	// in MySQL itself.
-	//
-	// As such, checking db_names for MySQL is quite pointless so we only
-	// check db_users. In future, if we implement some sort of access controls
-	// on queries, we might be able to restrict db_names as well e.g. by
-	// detecting full-qualified table names like db.table, until then the
-	// proper way is to use MySQL grants system.
+	// Only the username is checked upon initial connection. MongoDB sends
+	// database name with each protocol message (for query, update, etc.)
+	// so it is checked when we receive a message from client.
 	err = sessionCtx.Checker.CheckAccessToDatabase(sessionCtx.Server, mfaParams,
 		&services.DatabaseLabelsMatcher{Labels: sessionCtx.Server.GetAllLabels()},
 		&services.DatabaseUserMatcher{User: sessionCtx.DatabaseUser})
@@ -138,35 +114,21 @@ func (e *Engine) checkAccess(sessionCtx *common.Session) error {
 	return nil
 }
 
-// connect establishes connection to MySQL database.
-func (e *Engine) connect(ctx context.Context, sessionCtx *common.Session) (*client.Conn, error) {
+// connect establishes connection to MongoDB database.
+func (e *Engine) connect(ctx context.Context, sessionCtx *common.Session) (*tls.Conn, error) {
 	tlsConfig, err := e.Auth.GetTLSConfig(ctx, sessionCtx)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	var password string
-	if sessionCtx.Server.IsRDS() {
-		password, err = e.Auth.GetRDSAuthToken(sessionCtx)
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-	}
-	// TODO(r0mant): Set CLIENT_INTERACTIVE flag on the client?
-	conn, err := client.Connect(sessionCtx.Server.GetURI(),
-		sessionCtx.DatabaseUser,
-		password,
-		sessionCtx.DatabaseName,
-		func(conn *client.Conn) {
-			conn.SetTLSConfig(tlsConfig)
-		})
+	tlsConn, err := tls.Dial("tcp", sessionCtx.Server.GetURI(), tlsConfig)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	return conn, nil
+	return tlsConn, nil
 }
 
-// receiveFromClient relays protocol messages received from MySQL client
-// to MySQL database.
+// receiveFromClient relays protocol messages received from MongoDB client
+// to MongoDB database server.
 func (e *Engine) receiveFromClient(clientConn, serverConn net.Conn, clientErrCh chan<- error, sessionCtx *common.Session) {
 	log := e.Log.WithFields(logrus.Fields{
 		"from":   "client",
@@ -178,33 +140,43 @@ func (e *Engine) receiveFromClient(clientConn, serverConn net.Conn, clientErrCh 
 		close(clientErrCh)
 	}()
 	for {
-		packet, err := protocol.ParsePacket(clientConn)
+		message, err := protocol.ReadMessage(clientConn)
 		if err != nil {
 			if utils.IsOKNetworkError(err) {
 				log.Debug("Client connection closed.")
 				return
 			}
-			log.WithError(err).Error("Failed to read client packet.")
+			log.WithError(err).Error("Failed to read MongoDB client message.")
 			clientErrCh <- err
 			return
 		}
-		switch pkt := packet.(type) {
-		case *protocol.Query:
-			e.Audit.OnQuery(e.Context, sessionCtx, common.Query{Query: pkt.Query()})
-		case *protocol.Quit:
-			return
+		switch msg := message.(type) {
+		case *protocol.MessageOpMsg:
+			var documents []string
+			for _, document := range msg.GetDocuments() {
+				documents = append(documents, document.String())
+			}
+			e.Audit.OnQuery(e.Context, sessionCtx, common.Query{
+				Database:  msg.GetDatabase(),
+				Documents: documents,
+			})
+			// TODO(r0mant): Check access to the database name here. This will
+			// require forming an error response wire message in case of access
+			// denied and sending it back to the client.
+		case *protocol.MessageUnknown:
+			log.Debugf("=== %v", msg)
 		}
-		_, err = protocol.WritePacket(packet.Bytes(), serverConn)
+		_, err = serverConn.Write(message.GetBytes())
 		if err != nil {
-			log.WithError(err).Error("Failed to write server packet.")
+			log.WithError(err).Error("Failed to write MongoDB server message.")
 			clientErrCh <- err
 			return
 		}
 	}
 }
 
-// receiveFromServer relays protocol messages received from MySQL database
-// to MySQL client.
+// receiveFromServer relays protocol messages received from MongoDB database
+// server to MongoDB client.
 func (e *Engine) receiveFromServer(serverConn, clientConn net.Conn, serverErrCh chan<- error) {
 	log := e.Log.WithFields(logrus.Fields{
 		"from":   "server",
@@ -215,22 +187,12 @@ func (e *Engine) receiveFromServer(serverConn, clientConn net.Conn, serverErrCh 
 		log.Debug("Stop receiving from server.")
 		close(serverErrCh)
 	}()
-	for {
-		packet, err := protocol.ParsePacket(serverConn)
-		if err != nil {
-			if utils.IsOKNetworkError(err) {
-				log.Debug("Server connection closed.")
-				return
-			}
-			log.WithError(err).Error("Failed to read server packet.")
-			serverErrCh <- err
+	_, err := io.Copy(clientConn, serverConn)
+	if err != nil {
+		if utils.IsOKNetworkError(err) {
+			log.Debug("Server connection closed.")
 			return
 		}
-		_, err = protocol.WritePacket(packet.Bytes(), clientConn)
-		if err != nil {
-			log.WithError(err).Error("Failed to write client packet.")
-			serverErrCh <- err
-			return
-		}
+		serverErrCh <- trace.Wrap(err)
 	}
 }

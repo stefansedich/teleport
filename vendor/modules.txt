@@ -185,6 +185,8 @@ github.com/gizak/termui/v3/drawille
 github.com/gizak/termui/v3/widgets
 # github.com/go-logr/logr v0.2.0
 github.com/go-logr/logr
+# github.com/go-stack/stack v1.8.0
+github.com/go-stack/stack
 # github.com/gogo/protobuf v1.3.2 => github.com/gravitational/protobuf v1.3.2-0.20201123192827-2b9fcfaffcbf
 ## explicit
 github.com/gogo/protobuf/gogoproto
@@ -237,6 +239,8 @@ github.com/googleapis/gax-go/v2
 github.com/googleapis/gnostic/compiler
 github.com/googleapis/gnostic/extensions
 github.com/googleapis/gnostic/openapiv2
+# github.com/gopherjs/gopherjs v0.0.0-20190430165422-3e4dfb77656c
+## explicit
 # github.com/gorilla/handlers v1.5.1
 ## explicit
 github.com/gorilla/handlers
@@ -516,6 +520,12 @@ go.etcd.io/etcd/raft/quorum
 go.etcd.io/etcd/raft/raftpb
 go.etcd.io/etcd/raft/tracker
 go.etcd.io/etcd/version
+# go.mongodb.org/mongo-driver v1.4.6
+## explicit
+go.mongodb.org/mongo-driver/bson/bsontype
+go.mongodb.org/mongo-driver/bson/primitive
+go.mongodb.org/mongo-driver/x/bsonx/bsoncore
+go.mongodb.org/mongo-driver/x/mongo/driver/wiremessage
 # go.opencensus.io v0.22.5
 ## explicit
 go.opencensus.io

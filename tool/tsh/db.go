@@ -18,7 +18,10 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gravitational/teleport/api/client/proto"
@@ -99,6 +102,13 @@ func onDatabaseLogin(cf *CLIConf) error {
 
 func databaseLogin(cf *CLIConf, tc *client.TeleportClient, db tlsca.RouteToDatabase, quiet bool) error {
 	log.Debugf("Fetching database access certificate for %s on cluster %v.", db, tc.SiteName)
+	// When generating MongoDB certificate, database username must be encoded
+	// into it since it's using regular TLS handshake and certificate is the
+	// only place we can get it from (unlike e.g. Postgres/MySQL where it is
+	// sent via a separate wire protocol message).
+	if db.Protocol == defaults.ProtocolMongo && db.Username == "" {
+		return trace.BadParameter("please provide the database user name using --db-user flag")
+	}
 	profile, err := client.StatusCurrent("", cf.Proxy)
 	if err != nil {
 		return trace.Wrap(err)
@@ -222,6 +232,38 @@ func onDatabaseEnv(cf *CLIConf) error {
 	return nil
 }
 
+// onDatabaseMongo implements "tsh db mongo" command.
+func onDatabaseMongo(cf *CLIConf) error {
+	tc, err := makeClient(cf, false)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	profile, err := client.StatusCurrent("", cf.Proxy)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	database, err := pickActiveDatabase(cf)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	if database.Protocol != defaults.ProtocolMongo {
+		return trace.BadParameter("database %q is not MongoDB", database)
+	}
+	host, port := tc.WebProxyHostPort()
+	cmd := exec.Command("mongo", "--host", host, "--port", strconv.Itoa(port),
+		"--tls", "--tlsCertificateKeyFile", profile.DatabaseCertPath(database.ServiceName),
+		"--authenticationDatabase", "$external",
+		"--authenticationMechanism", "MONGODB-X509")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	err = cmd.Run()
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	return nil
+}
+
 // onDatabaseConfig implements "tsh db config" command.
 func onDatabaseConfig(cf *CLIConf) error {
 	tc, err := makeClient(cf, false)
@@ -245,8 +287,28 @@ func onDatabaseConfig(cf *CLIConf) error {
 		host, port = tc.PostgresProxyHostPort()
 	case defaults.ProtocolMySQL:
 		host, port = tc.MySQLProxyHostPort()
+	case defaults.ProtocolMongo:
+		host, port = tc.WebProxyHostPort()
 	default:
 		return trace.BadParameter("unknown database protocol: %q", database)
+	}
+	// TODO(r0mant): Fix.
+	if cf.Format == "cmd" {
+		switch database.Protocol {
+		case defaults.ProtocolMongo:
+			fmt.Printf(
+				`mongo \
+  --host %v \
+  --port %v \
+  --tls \
+  --tlsCertificateKeyFile %v \
+  --authenticationDatabase '$external' \
+  --authenticationMechanism MONGODB-X509
+`, host, port, profile.DatabaseCertPath(database.ServiceName))
+		default:
+			return trace.BadParameter("can't print command for %q", database)
+		}
+		return nil
 	}
 	fmt.Printf(`Name:      %v
 Host:      %v

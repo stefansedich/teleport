@@ -27,6 +27,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/subtle"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -477,6 +478,8 @@ type certs struct {
 	ssh []byte
 	// tls is PEM encoded TLS certificate
 	tls []byte
+	// db is PEM encoded TLS certificate for database access
+	db []byte
 }
 
 type certRequest struct {
@@ -539,6 +542,20 @@ type certRequest struct {
 	mfaVerified string
 	// clientIP is an IP of the client requesting the certificate.
 	clientIP string
+}
+
+// check verifies the cert request is valid.
+func (r *certRequest) check() error {
+	// When generating MongoDB certificate, database username must be encoded
+	// into it since it's using regular TLS handshake and certificate is the
+	// only place we can get it from (unlike e.g. Postgres/MySQL where it is
+	// sent via a separate wire protocol message).
+	if r.dbProtocol == defaults.ProtocolMongo {
+		if r.dbUser == "" {
+			return trace.BadParameter("must provide database user name to generate certificate for database %q", r.dbService)
+		}
+	}
+	return nil
 }
 
 type certRequestOption func(*certRequest)
@@ -677,6 +694,11 @@ func (a *Server) GenerateDatabaseTestCert(req DatabaseTestCertRequest) ([]byte, 
 
 // generateUserCert generates user certificates
 func (a *Server) generateUserCert(req certRequest) (*certs, error) {
+	err := req.check()
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
 	// reuse the same RSA keys for SSH and TLS keys
 	cryptoPubKey, err := sshutils.CryptoPublicKey(req.publicKey)
 	if err != nil {
@@ -859,7 +881,21 @@ func (a *Server) generateUserCert(req certRequest) (*certs, error) {
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	return &certs{ssh: sshCert, tls: tlsCert}, nil
+	certs := &certs{ssh: sshCert, tls: tlsCert}
+	if req.dbService != "" {
+		certs.db, err = tlsAuthority.GenerateCertificate(
+			tlsca.CertificateRequest{
+				Clock:      a.clock,
+				PublicKey:  cryptoPubKey,
+				Subject:    pkix.Name{CommonName: req.dbUser},
+				Extensions: extensions,
+				NotAfter:   a.clock.Now().UTC().Add(sessionTTL),
+			})
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+	}
+	return certs, nil
 }
 
 // WithUserLock executes function authenticateFn that performs user authentication

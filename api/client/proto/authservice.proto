@@ -110,10 +110,12 @@ message WatchKind {
 
 // Set of certificates corresponding to a single public key.
 message Certs {
-    // SSH X509 cert (PEM-encoded).
+    // SSH is the PEM-encoded SSH certificate.
     bytes SSH = 1 [ (gogoproto.jsontag) = "ssh,omitempty" ];
-    // TLS X509 cert (PEM-encoded).
+    // TLS is the PEM-encoded x509 certificate.
     bytes TLS = 2 [ (gogoproto.jsontag) = "tls,omitempty" ];
+    // DB is the PEM-encoded x509 certificate for database access.
+    bytes DB = 3 [ (gogoproto.jsontag) = "db,omitempty" ];
 }
 
 // UserCertRequest specifies certificate-generation parameters

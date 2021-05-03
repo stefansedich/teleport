@@ -40,6 +40,11 @@ import (
 
 // Add updates database connection profile file.
 func Add(tc *client.TeleportClient, db tlsca.RouteToDatabase, clientProfile client.ProfileStatus, quiet bool) error {
+	switch db.Protocol {
+	case defaults.ProtocolPostgres, defaults.ProtocolMySQL:
+	default:
+		return nil
+	}
 	profileFile, err := load(db)
 	if err != nil {
 		return trace.Wrap(err)
@@ -104,6 +109,11 @@ func Env(tc *client.TeleportClient, db tlsca.RouteToDatabase) (map[string]string
 
 // Delete removes the specified database connection profile.
 func Delete(tc *client.TeleportClient, db tlsca.RouteToDatabase) error {
+	switch db.Protocol {
+	case defaults.ProtocolPostgres, defaults.ProtocolMySQL:
+	default:
+		return nil
+	}
 	profileFile, err := load(db)
 	if err != nil {
 		return trace.Wrap(err)

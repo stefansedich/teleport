@@ -2239,6 +2239,7 @@ type proxyListeners struct {
 	reverseTunnel net.Listener
 	kube          net.Listener
 	db            net.Listener
+	dbTLS         net.Listener
 	mysql         net.Listener
 }
 
@@ -2257,6 +2258,9 @@ func (l *proxyListeners) Close() {
 	}
 	if l.db != nil {
 		l.db.Close()
+	}
+	if l.dbTLS != nil {
+		l.dbTLS.Close()
 	}
 	if l.mysql != nil {
 		l.mysql.Close()
@@ -2648,6 +2652,19 @@ func (process *TeleportProcess) initProxyEndpoint(conn *Connector) error {
 			}
 
 			listeners.web = tls.NewListener(listeners.web, tlsConfig)
+
+			// TODO(r0mant): Add comments.
+			listener, err := multiplexer.NewTLSListener(multiplexer.TLSListenerConfig{
+				Listener: listeners.web,
+				ID:       "web",
+			})
+			if err != nil {
+				return trace.Wrap(err)
+			}
+			go listener.Serve()
+
+			listeners.web = listener.HTTP()
+			listeners.dbTLS = listener.DB()
 		}
 		webServer = &http.Server{
 			Handler:           proxyLimiter,
@@ -2832,6 +2849,15 @@ func (process *TeleportProcess) initProxyEndpoint(conn *Connector) error {
 				log.Infof("Starting MySQL proxy server on %v.", cfg.Proxy.MySQLAddr.Addr)
 				if err := dbProxyServer.ServeMySQL(listeners.mysql); err != nil {
 					log.WithError(err).Warn("MySQL proxy server exited with error.")
+				}
+				return nil
+			})
+		}
+		if listeners.dbTLS != nil {
+			process.RegisterCriticalFunc("proxy.db.tls", func() error {
+				log.Infof("Starting Database TLS proxy server on %v.", cfg.Proxy.WebAddr.Addr)
+				if err := dbProxyServer.ServeTLS(listeners.dbTLS); err != nil {
+					log.WithError(err).Warn("Database TLS proxy server exited with error.")
 				}
 				return nil
 			})
