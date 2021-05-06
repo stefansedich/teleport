@@ -313,8 +313,7 @@ func (s *IntSuite) TestAuditOn(c *check.C) {
 		comment := check.Commentf(tt.comment)
 		makeConfig := func() (*check.C, []string, []*InstanceSecrets, *service.Config) {
 			clusterConfig, err := services.NewClusterConfig(services.ClusterConfigSpecV3{
-				Audit:     services.AuditConfig{AuditSessionsURI: tt.auditSessionsURI},
-				LocalAuth: services.NewBool(true),
+				Audit: services.AuditConfig{AuditSessionsURI: tt.auditSessionsURI},
 			})
 			c.Assert(err, check.IsNil, comment)
 
@@ -1161,11 +1160,6 @@ func (s *IntSuite) runDisconnectTest(c *check.C, tc disconnectTestCase) {
 	c.Assert(err, check.IsNil, comment)
 	t.AddUserWithRole(username, role)
 
-	clusterConfig, err := services.NewClusterConfig(services.ClusterConfigSpecV3{
-		LocalAuth: services.NewBool(true),
-	})
-	c.Assert(err, check.IsNil, comment)
-
 	netConfig, err := types.NewClusterNetworkingConfig(types.ClusterNetworkingConfigSpecV2{
 		SessionControlTimeout: services.Duration(tc.sessCtlTimeout),
 	})
@@ -1178,7 +1172,6 @@ func (s *IntSuite) runDisconnectTest(c *check.C, tc disconnectTestCase) {
 
 	cfg := s.defaultServiceConfig()
 	cfg.Auth.Enabled = true
-	cfg.Auth.ClusterConfig = clusterConfig
 	cfg.Auth.NetworkingConfig = netConfig
 	cfg.Auth.SessionRecordingConfig = recConfig
 	cfg.Proxy.DisableWebService = true

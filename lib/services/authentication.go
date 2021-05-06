@@ -131,6 +131,12 @@ const AuthPreferenceSpecSchemaTemplate = `{
 		},
 		"require_session_mfa": {
 			"type": "boolean"
+		},
+		"disconnect_expired_cert": {
+			"anyOf": [{"type": "string"}, {"type": "boolean"}]
+		},
+		"allow_local_auth": {
+			"anyOf": [{"type": "string"}, { "type": "boolean"}]
 		}%v
 	}
 }`
