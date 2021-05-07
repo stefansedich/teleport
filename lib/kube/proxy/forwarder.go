@@ -62,6 +62,18 @@ import (
 	utilexec "k8s.io/client-go/util/exec"
 )
 
+// KubeServiceType specifies a Teleport service type which can proxy Kubernetes requests
+type KubeServiceType int
+
+const (
+	// KubeService is a Teleport kubernetes_service
+	KubeService KubeServiceType = iota
+	// ProxyService is a Teleport proxy_service with kube_listen_addr/kube_public_addr used
+	ProxyService
+	// LegacyProxyService is a Teleport proxy_service with the kubernetes section enabled
+	LegacyProxyService
+)
+
 // ForwarderConfig specifies configuration for proxy forwarder
 type ForwarderConfig struct {
 	// ReverseTunnelSrv is the teleport reverse tunnel server
@@ -93,10 +105,8 @@ type ForwarderConfig struct {
 	Context context.Context
 	// KubeconfigPath is a path to kubernetes configuration
 	KubeconfigPath string
-	// NewKubeService specifies whether to apply the additional kubernetes_service features:
-	// - parsing multiple kubeconfig entries
-	// - enforcing self permission check
-	NewKubeService bool
+	// KubeServiceType specifies which Teleport service type this forwarder is for
+	KubeServiceType
 	// KubeClusterName is the name of the kubernetes cluster that this
 	// forwarder handles.
 	KubeClusterName string
@@ -156,7 +166,7 @@ func (f *ForwarderConfig) CheckAndSetDefaults() error {
 	if f.Component == "" {
 		f.Component = "kube_forwarder"
 	}
-	if f.KubeClusterName == "" && f.KubeconfigPath == "" {
+	if f.KubeClusterName == "" && f.KubeconfigPath == "" && f.KubeServiceType == LegacyProxyService {
 		// Running without a kubeconfig and explicit k8s cluster name. Use
 		// teleport cluster name instead, to ask kubeutils.GetKubeConfig to
 		// attempt loading the in-cluster credentials.
@@ -175,7 +185,7 @@ func NewForwarder(cfg ForwarderConfig) (*Forwarder, error) {
 		trace.Component: cfg.Component,
 	})
 
-	creds, err := getKubeCreds(cfg.Context, log, cfg.ClusterName, cfg.KubeClusterName, cfg.KubeconfigPath, cfg.NewKubeService)
+	creds, err := getKubeCreds(cfg.Context, log, cfg.ClusterName, cfg.KubeClusterName, cfg.KubeconfigPath, cfg.KubeServiceType)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}

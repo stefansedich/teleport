@@ -62,43 +62,59 @@ func TestOnlySkipSelfPermissionCheck(skip bool) {
 // - kubeconfig: a file with a set of k8s endpoints and credentials mapped to
 //   them this is used when kubeconfigPath is set
 //
-// newKubeService changes the loading behavior:
-// - false:
+// serviceType changes the loading behavior:
+// - LegacyProxyService:
 //   - if loading from kubeconfig, only "current-context" is returned; the
 //     returned map key matches tpClusterName
 //   - if no credentials are loaded, no error is returned
 //   - permission self-test failures are only logged
-// - true:
+// - ProxyService:
+//   - no credentials are loaded and no error is returned
+// - KubeService:
 //   - if loading from kubeconfig, all contexts are returned
 //   - if no credentials are loaded, returns an error
 //   - permission self-test failures cause an error to be returned
-func getKubeCreds(ctx context.Context, log logrus.FieldLogger, tpClusterName, kubeClusterName, kubeconfigPath string, newKubeService bool) (map[string]*kubeCreds, error) {
+func getKubeCreds(ctx context.Context, log logrus.FieldLogger, tpClusterName, kubeClusterName, kubeconfigPath string, serviceType KubeServiceType) (map[string]*kubeCreds, error) {
 	log.
 		WithField("kubeconfigPath", kubeconfigPath).
 		WithField("kubeClusterName", kubeClusterName).
-		WithField("newKubeService", newKubeService).
+		WithField("serviceType", serviceType).
 		Debug("Reading kubernetes creds.")
 
+	// Proxy service should never have creds, forwards to kube service
+	if serviceType == ProxyService {
+		return map[string]*kubeCreds{}, nil
+	}
+
 	// Load kubeconfig or local pod credentials.
-	cfg, err := kubeutils.GetKubeConfig(kubeconfigPath, newKubeService, kubeClusterName)
+	loadAll := serviceType == KubeService
+	cfg, err := kubeutils.GetKubeConfig(kubeconfigPath, loadAll, kubeClusterName)
 	if err != nil && !trace.IsNotFound(err) {
 		return nil, trace.Wrap(err)
 	}
+
 	if trace.IsNotFound(err) || len(cfg.Contexts) == 0 {
-		if newKubeService {
-			return nil, trace.BadParameter("no kubernetes credentials found; kubernetes_service requires either a valid kubeconfig_path or to run inside of a kubernetes pod")
+		switch serviceType {
+		case KubeService:
+			return nil, trace.BadParameter("No kubernetes credentials found; kubernetes_service requires either a valid kubeconfig_path or to run inside of a kubernetes pod")
+		case LegacyProxyService:
+			log.Debugf("Could not load kubernetes credentials. This proxy will still handle kubernetes requests for trusted teleport clusters or kubernetes nodes in this teleport cluster")
 		}
-		log.Debugf("Could not load kubernetes credentials. This proxy will still handle kubernetes requests for trusted teleport clusters or kubernetes nodes in this teleport cluster")
 		return map[string]*kubeCreds{}, nil
 	}
-	if !newKubeService {
-		// Hack for proxy_service - register a k8s cluster named after the
-		// teleport cluster name to route legacy requests.
+
+	if serviceType == LegacyProxyService {
+		// Hack for legacy proxy service - register a k8s cluster named after
+		// the teleport cluster name to route legacy requests.
 		//
 		// Also, remove all other contexts. Multiple kubeconfig entries are
 		// only supported for kubernetes_service.
-		cfg.Contexts = map[string]*rest.Config{
-			tpClusterName: cfg.Contexts[cfg.CurrentContext],
+		if currentContext, ok := cfg.Contexts[cfg.CurrentContext]; ok {
+			cfg.Contexts = map[string]*rest.Config{
+				tpClusterName: currentContext,
+			}
+		} else {
+			return nil, trace.BadParameter("No Kubernetes current-context found; Kubernetes proxy service requires either a valid kubeconfig_path with a current-context or to run inside of a kubernetes pod")
 		}
 	}
 
@@ -117,7 +133,7 @@ func getKubeCreds(ctx context.Context, log logrus.FieldLogger, tpClusterName, ku
 			// kubernetes_service must have valid RBAC permissions, otherwise
 			// it's pointless.
 			// proxy_service can run without them (e.g. a root proxy).
-			if newKubeService {
+			if serviceType == KubeService {
 				return nil, trace.Wrap(err)
 			}
 			log.WithError(err).Warning("Failed to test the necessary kubernetes permissions. This teleport instance will still handle kubernetes requests towards other kubernetes clusters")
