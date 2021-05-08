@@ -642,13 +642,17 @@ init-submodules-e: init-webapps-submodules-e
 	git submodule update
 
 .PHONY: update-vendor
-update-vendor:
+update-vendor: update-vendor-api
 	go mod tidy
 	go mod vendor
 	# delete the vendored api package. In its place
 	# create a symlink to the the original api package
 	rm -r vendor/github.com/gravitational/teleport/api
 	ln -s -r $(shell readlink -f api) vendor/github.com/gravitational/teleport
+
+.PHONY: update-vendor-api
+update-vendor-api:
+	cd api && go mod tidy
 
 # update-webassets updates the minified code in the webassets repo using the latest webapps
 # repo and creates a PR in the teleport repo to update webassets submodule.

@@ -26,7 +26,7 @@ import (
 	"github.com/gravitational/teleport/lib/services/suite"
 
 	"gopkg.in/check.v1"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
 type ClusterConfigurationSuite struct {
