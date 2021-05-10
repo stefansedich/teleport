@@ -62,15 +62,20 @@ import (
 	utilexec "k8s.io/client-go/util/exec"
 )
 
-// KubeServiceType specifies a Teleport service type which can proxy Kubernetes requests
+// KubeServiceType specifies a Teleport service type which can forward Kubernetes requests
 type KubeServiceType int
 
 const (
-	// KubeService is a Teleport kubernetes_service
+	// KubeService is a Teleport kubernetes_service. A KubeService always forwards
+	// requests directly to a Kubernetes endpoint.
 	KubeService KubeServiceType = iota
-	// ProxyService is a Teleport proxy_service with kube_listen_addr/kube_public_addr used
+	// ProxyService is a Teleport proxy_service with kube_listen_addr/
+	// kube_public_addr enabled. A ProxyService always forwards requests to a
+	// Teleport KubeService or LegacyProxyService.
 	ProxyService
-	// LegacyProxyService is a Teleport proxy_service with the kubernetes section enabled
+	// LegacyProxyService is a Teleport proxy_service with the kubernetes section
+	// enabled. A LegacyProxyService can forward requests directly to a Kubernetes
+	// endpoint, or to another Teleport LegacyProxyService or KubeService.
 	LegacyProxyService
 )
 
@@ -106,7 +111,7 @@ type ForwarderConfig struct {
 	// KubeconfigPath is a path to kubernetes configuration
 	KubeconfigPath string
 	// KubeServiceType specifies which Teleport service type this forwarder is for
-	KubeServiceType
+	KubeServiceType KubeServiceType
 	// KubeClusterName is the name of the kubernetes cluster that this
 	// forwarder handles.
 	KubeClusterName string
