@@ -34,14 +34,16 @@ import (
 // EventsService implements service to watch for events
 type EventsService struct {
 	*logrus.Entry
-	backend backend.Backend
+	backend          backend.Backend
+	getClusterConfig getClusterConfigFunc
 }
 
 // NewEventsService returns new events service instance
-func NewEventsService(b backend.Backend) *EventsService {
+func NewEventsService(b backend.Backend, getClusterConfig getClusterConfigFunc) *EventsService {
 	return &EventsService{
-		Entry:   logrus.WithFields(logrus.Fields{trace.Component: "Events"}),
-		backend: b,
+		Entry:            logrus.WithFields(logrus.Fields{trace.Component: "Events"}),
+		backend:          b,
+		getClusterConfig: getClusterConfig,
 	}
 }
 
@@ -50,13 +52,13 @@ func (e *EventsService) NewWatcher(ctx context.Context, watch services.Watch) (s
 	if len(watch.Kinds) == 0 {
 		return nil, trace.BadParameter("global watches are not supported yet")
 	}
-	var parsers []resourceParser
+	var parsers []eventTranslator
 	var prefixes [][]byte
 	for _, kind := range watch.Kinds {
 		if kind.Name != "" && kind.Kind != services.KindNamespace {
 			return nil, trace.BadParameter("watch with Name is only supported for Namespace resource")
 		}
-		var parser resourceParser
+		var parser eventTranslator
 		switch kind.Kind {
 		case services.KindCertAuthority:
 			parser = newCertAuthorityParser(kind.LoadSecrets)
@@ -65,13 +67,13 @@ func (e *EventsService) NewWatcher(ctx context.Context, watch services.Watch) (s
 		case services.KindStaticTokens:
 			parser = newStaticTokensParser()
 		case services.KindClusterConfig:
-			parser = newClusterConfigParser()
+			parser = newClusterConfigParser(e.getClusterConfig)
 		case types.KindClusterNetworkingConfig:
-			parser = newClusterNetworkingConfigParser()
+			parser = newClusterNetworkingConfigParser(e.getClusterConfig)
 		case types.KindClusterAuthPreference:
 			parser = newAuthPreferenceParser()
 		case types.KindSessionRecordingConfig:
-			parser = newSessionRecordingConfigParser()
+			parser = newSessionRecordingConfigParser(e.getClusterConfig)
 		case services.KindClusterName:
 			parser = newClusterNameParser()
 		case services.KindNamespace:
@@ -135,7 +137,7 @@ func (e *EventsService) NewWatcher(ctx context.Context, watch services.Watch) (s
 	return newWatcher(w, e.Entry, parsers), nil
 }
 
-func newWatcher(backendWatcher backend.Watcher, l *logrus.Entry, parsers []resourceParser) *watcher {
+func newWatcher(backendWatcher backend.Watcher, l *logrus.Entry, parsers []eventTranslator) *watcher {
 	w := &watcher{
 		backendWatcher: backendWatcher,
 		Entry:          l,
@@ -148,7 +150,7 @@ func newWatcher(backendWatcher backend.Watcher, l *logrus.Entry, parsers []resou
 
 type watcher struct {
 	*logrus.Entry
-	parsers        []resourceParser
+	parsers        []eventTranslator
 	backendWatcher backend.Watcher
 	eventsC        chan services.Event
 }
@@ -157,21 +159,13 @@ func (w *watcher) Error() error {
 	return nil
 }
 
-func (w *watcher) parseEvent(e backend.Event) (*services.Event, error) {
+func (w *watcher) translate(e backend.Event) ([]services.Event, error) {
 	for _, p := range w.parsers {
 		if e.Type == backend.OpInit {
-			return &services.Event{Type: e.Type}, nil
+			return []services.Event{{Type: e.Type}}, nil
 		}
 		if p.match(e.Item.Key) {
-			resource, err := p.parse(e)
-			if err != nil {
-				return nil, trace.Wrap(err)
-			}
-			// if resource is nil, then it was well-formed but is being filtered out.
-			if resource == nil {
-				return nil, nil
-			}
-			return &services.Event{Type: e.Type, Resource: resource}, nil
+			return p.translateMatching(e)
 		}
 	}
 	return nil, trace.NotFound("no match found for %v %v", e.Type, string(e.Item.Key))
@@ -183,7 +177,7 @@ func (w *watcher) forwardEvents() {
 		case <-w.backendWatcher.Done():
 			return
 		case event := <-w.backendWatcher.Events():
-			converted, err := w.parseEvent(event)
+			convertedEvents, err := w.translate(event)
 			if err != nil {
 				// not found errors are expected, for example
 				// when namespace prefix is watched, it captures
@@ -194,14 +188,12 @@ func (w *watcher) forwardEvents() {
 				}
 				continue
 			}
-			// event is being filtered out
-			if converted == nil {
-				continue
-			}
-			select {
-			case w.eventsC <- *converted:
-			case <-w.backendWatcher.Done():
-				return
+			for _, converted := range convertedEvents {
+				select {
+				case w.eventsC <- converted:
+				case <-w.backendWatcher.Done():
+					return
+				}
 			}
 		}
 	}
@@ -223,51 +215,52 @@ func (w *watcher) Close() error {
 	return w.backendWatcher.Close()
 }
 
-// resourceParser is an interface
-// for parsing resource from backend byte event stream
-type resourceParser interface {
-	// parse parses resource from the backend event
-	parse(event backend.Event) (services.Resource, error)
-	// match returns true if event key matches
+// eventTranslator is an interface for translating matching events from backend
+// event stream into higher level events.
+type eventTranslator interface {
+	// translateMatching translates a matching backend event into a list of
+	// higher level events.
+	translateMatching(event backend.Event) ([]services.Event, error)
+	// match returns true if event key matches.
 	match(key []byte) bool
-	// prefix returns prefix to watch
+	// prefix returns prefix to watch.
 	prefix() []byte
 }
 
-// baseParser is a partial implementation of resourceParser for the most common
+// simpleMatcher is a partial implementation of eventTranslator for the most common
 // resource types (stored under a static prefix).
-type baseParser struct {
+type simpleMatcher struct {
 	matchPrefix []byte
 }
 
-func (p baseParser) prefix() []byte {
+func (p simpleMatcher) prefix() []byte {
 	return p.matchPrefix
 }
 
-func (p baseParser) match(key []byte) bool {
+func (p simpleMatcher) match(key []byte) bool {
 	return bytes.HasPrefix(key, p.matchPrefix)
 }
 
 func newCertAuthorityParser(loadSecrets bool) *certAuthorityParser {
 	return &certAuthorityParser{
-		loadSecrets: loadSecrets,
-		baseParser:  baseParser{matchPrefix: backend.Key(authoritiesPrefix)},
+		loadSecrets:   loadSecrets,
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(authoritiesPrefix)},
 	}
 }
 
 type certAuthorityParser struct {
-	baseParser
+	simpleMatcher
 	loadSecrets bool
 }
 
-func (p *certAuthorityParser) parse(event backend.Event) (services.Resource, error) {
+func (p *certAuthorityParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
 		caType, name, err := baseTwoKeys(event.Item.Key)
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return &services.ResourceHeader{
+		return resourcesToEvents(event.Type, &services.ResourceHeader{
 			Kind:    services.KindCertAuthority,
 			SubKind: caType,
 			Version: services.V2,
@@ -275,7 +268,7 @@ func (p *certAuthorityParser) parse(event backend.Event) (services.Resource, err
 				Name:      name,
 				Namespace: defaults.Namespace,
 			},
-		}, nil
+		})
 	case backend.OpPut:
 		ca, err := services.UnmarshalCertAuthority(event.Item.Value,
 			services.WithResourceID(event.Item.ID), services.WithExpires(event.Item.Expires), services.SkipValidation())
@@ -285,7 +278,7 @@ func (p *certAuthorityParser) parse(event backend.Event) (services.Resource, err
 		// never send private signing keys over event stream?
 		// this might not be true
 		setSigningKeys(ca, p.loadSecrets)
-		return ca, nil
+		return resourcesToEvents(event.Type, ca)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
@@ -293,18 +286,18 @@ func (p *certAuthorityParser) parse(event backend.Event) (services.Resource, err
 
 func newProvisionTokenParser() *provisionTokenParser {
 	return &provisionTokenParser{
-		baseParser: baseParser{matchPrefix: backend.Key(tokensPrefix)},
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(tokensPrefix)},
 	}
 }
 
 type provisionTokenParser struct {
-	baseParser
+	simpleMatcher
 }
 
-func (p *provisionTokenParser) parse(event backend.Event) (services.Resource, error) {
+func (p *provisionTokenParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
-		return resourceHeader(event, services.KindToken, services.V2, 0)
+		return resourceHeader(event, services.KindToken, services.V2, 0, "")
 	case backend.OpPut:
 		token, err := services.UnmarshalProvisionToken(event.Item.Value,
 			services.WithResourceID(event.Item.ID),
@@ -313,7 +306,7 @@ func (p *provisionTokenParser) parse(event backend.Event) (services.Resource, er
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return token, nil
+		return resourcesToEvents(event.Type, token)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
@@ -321,23 +314,18 @@ func (p *provisionTokenParser) parse(event backend.Event) (services.Resource, er
 
 func newStaticTokensParser() *staticTokensParser {
 	return &staticTokensParser{
-		baseParser: baseParser{matchPrefix: backend.Key(clusterConfigPrefix, staticTokensPrefix)},
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(clusterConfigPrefix, staticTokensPrefix)},
 	}
 }
 
 type staticTokensParser struct {
-	baseParser
+	simpleMatcher
 }
 
-func (p *staticTokensParser) parse(event backend.Event) (services.Resource, error) {
+func (p *staticTokensParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
-		h, err := resourceHeader(event, services.KindStaticTokens, services.V2, 0)
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		h.SetName(services.MetaNameStaticTokens)
-		return h, nil
+		return resourceHeader(event, services.KindStaticTokens, services.V2, 0, services.MetaNameStaticTokens)
 	case backend.OpPut:
 		tokens, err := services.UnmarshalStaticTokens(event.Item.Value,
 			services.WithResourceID(event.Item.ID),
@@ -346,68 +334,61 @@ func (p *staticTokensParser) parse(event backend.Event) (services.Resource, erro
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return tokens, nil
+		return resourcesToEvents(event.Type, tokens)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
 }
 
-func newClusterConfigParser() *clusterConfigParser {
+func newClusterConfigParser(getClusterConfig getClusterConfigFunc) *clusterConfigParser {
 	return &clusterConfigParser{
-		baseParser: baseParser{matchPrefix: backend.Key(clusterConfigPrefix, generalPrefix)},
+		simpleMatcher:    simpleMatcher{matchPrefix: backend.Key(clusterConfigPrefix, generalPrefix)},
+		getClusterConfig: getClusterConfig,
 	}
 }
 
 type clusterConfigParser struct {
-	baseParser
+	simpleMatcher
+	getClusterConfig getClusterConfigFunc
 }
 
-func (p *clusterConfigParser) parse(event backend.Event) (services.Resource, error) {
+func (p *clusterConfigParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
-		h, err := resourceHeader(event, services.KindClusterConfig, services.V3, 0)
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		h.SetName(services.MetaNameClusterConfig)
-		return h, nil
+		return resourceHeader(event, services.KindClusterConfig, services.V3, 0, services.MetaNameClusterConfig)
 	case backend.OpPut:
-		clusterConfig, err := services.UnmarshalClusterConfig(
-			event.Item.Value,
-			services.WithResourceID(event.Item.ID),
-			services.WithExpires(event.Item.Expires),
-			services.SkipValidation(),
-		)
+		// To ensure backward compatibility, do not use the ClusterConfig
+		// resource passed with the event but perform a separate get from the
+		// backend. The resource fetched in this way is populated with all the
+		// fields expected by legacy event consumers.  DELETE IN 8.0.0
+		clusterConfig, err := p.getClusterConfig()
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return clusterConfig, nil
+		return resourcesToEvents(event.Type, clusterConfig)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
 }
 
-func newClusterNetworkingConfigParser() *clusterNetworkingConfigParser {
+func newClusterNetworkingConfigParser(getClusterConfig getClusterConfigFunc) *clusterNetworkingConfigParser {
 	return &clusterNetworkingConfigParser{
-		baseParser: baseParser{matchPrefix: backend.Key(clusterConfigPrefix, networkingPrefix)},
+		simpleMatcher:    simpleMatcher{matchPrefix: backend.Key(clusterConfigPrefix, networkingPrefix)},
+		getClusterConfig: getClusterConfig,
 	}
 }
 
 type clusterNetworkingConfigParser struct {
-	baseParser
+	simpleMatcher
+	getClusterConfig getClusterConfigFunc
 }
 
-func (p *clusterNetworkingConfigParser) parse(event backend.Event) (services.Resource, error) {
+func (p *clusterNetworkingConfigParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
-		h, err := resourceHeader(event, types.KindClusterNetworkingConfig, services.V2, 0)
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		h.SetName(types.MetaNameClusterNetworkingConfig)
-		return h, nil
+		return resourceHeader(event, types.KindClusterNetworkingConfig, services.V2, 0, types.MetaNameClusterNetworkingConfig)
 	case backend.OpPut:
-		clusterNetworkingConfig, err := services.UnmarshalClusterNetworkingConfig(
+		netConfig, err := services.UnmarshalClusterNetworkingConfig(
 			event.Item.Value,
 			services.WithResourceID(event.Item.ID),
 			services.WithExpires(event.Item.Expires),
@@ -416,7 +397,14 @@ func (p *clusterNetworkingConfigParser) parse(event backend.Event) (services.Res
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return clusterNetworkingConfig, nil
+		// To ensure backward compatibility, also emit an event indicating
+		// ClusterConfig change to legacy event consumers.  DELETE IN 8.0.0
+		clusterConfig, err := p.getClusterConfig()
+		if err != nil {
+			logrus.WithError(err).Warn("Failed to get cluster config.")
+			return resourcesToEvents(event.Type, netConfig)
+		}
+		return resourcesToEvents(event.Type, netConfig, clusterConfig)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
@@ -424,23 +412,18 @@ func (p *clusterNetworkingConfigParser) parse(event backend.Event) (services.Res
 
 func newAuthPreferenceParser() *authPreferenceParser {
 	return &authPreferenceParser{
-		baseParser: baseParser{matchPrefix: backend.Key(authPrefix, preferencePrefix, generalPrefix)},
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(authPrefix, preferencePrefix, generalPrefix)},
 	}
 }
 
 type authPreferenceParser struct {
-	baseParser
+	simpleMatcher
 }
 
-func (p *authPreferenceParser) parse(event backend.Event) (services.Resource, error) {
+func (p *authPreferenceParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
-		h, err := resourceHeader(event, services.KindClusterAuthPreference, services.V2, 0)
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		h.SetName(services.MetaNameClusterAuthPreference)
-		return h, nil
+		return resourceHeader(event, services.KindClusterAuthPreference, services.V2, 0, services.MetaNameClusterAuthPreference)
 	case backend.OpPut:
 		ap, err := services.UnmarshalAuthPreference(
 			event.Item.Value,
@@ -451,33 +434,30 @@ func (p *authPreferenceParser) parse(event backend.Event) (services.Resource, er
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return ap, nil
+		return resourcesToEvents(event.Type, ap)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
 }
 
-func newSessionRecordingConfigParser() *sessionRecordingConfigParser {
+func newSessionRecordingConfigParser(getClusterConfig getClusterConfigFunc) *sessionRecordingConfigParser {
 	return &sessionRecordingConfigParser{
-		baseParser: baseParser{matchPrefix: backend.Key(clusterConfigPrefix, sessionRecordingPrefix)},
+		simpleMatcher:    simpleMatcher{matchPrefix: backend.Key(clusterConfigPrefix, sessionRecordingPrefix)},
+		getClusterConfig: getClusterConfig,
 	}
 }
 
 type sessionRecordingConfigParser struct {
-	baseParser
+	simpleMatcher
+	getClusterConfig getClusterConfigFunc
 }
 
-func (p *sessionRecordingConfigParser) parse(event backend.Event) (services.Resource, error) {
+func (p *sessionRecordingConfigParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
-		h, err := resourceHeader(event, types.KindSessionRecordingConfig, services.V2, 0)
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		h.SetName(types.MetaNameSessionRecordingConfig)
-		return h, nil
+		return resourceHeader(event, types.KindSessionRecordingConfig, services.V2, 0, types.MetaNameSessionRecordingConfig)
 	case backend.OpPut:
-		ap, err := services.UnmarshalSessionRecordingConfig(
+		recConfig, err := services.UnmarshalSessionRecordingConfig(
 			event.Item.Value,
 			services.WithResourceID(event.Item.ID),
 			services.WithExpires(event.Item.Expires),
@@ -486,7 +466,14 @@ func (p *sessionRecordingConfigParser) parse(event backend.Event) (services.Reso
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return ap, nil
+		// To ensure backward compatibility, also emit an event indicating
+		// ClusterConfig change to legacy event consumers.  DELETE IN 8.0.0
+		clusterConfig, err := p.getClusterConfig()
+		if err != nil {
+			logrus.WithError(err).Warn("Failed to get cluster config.")
+			return resourcesToEvents(event.Type, recConfig)
+		}
+		return resourcesToEvents(event.Type, recConfig, clusterConfig)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
@@ -494,23 +481,18 @@ func (p *sessionRecordingConfigParser) parse(event backend.Event) (services.Reso
 
 func newClusterNameParser() *clusterNameParser {
 	return &clusterNameParser{
-		baseParser: baseParser{matchPrefix: backend.Key(clusterConfigPrefix, namePrefix)},
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(clusterConfigPrefix, namePrefix)},
 	}
 }
 
 type clusterNameParser struct {
-	baseParser
+	simpleMatcher
 }
 
-func (p *clusterNameParser) parse(event backend.Event) (services.Resource, error) {
+func (p *clusterNameParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
-		h, err := resourceHeader(event, services.KindClusterName, services.V2, 0)
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		h.SetName(services.MetaNameClusterName)
-		return h, nil
+		return resourceHeader(event, services.KindClusterName, services.V2, 0, services.MetaNameClusterName)
 	case backend.OpPut:
 		clusterName, err := services.UnmarshalClusterName(event.Item.Value,
 			services.WithResourceID(event.Item.ID),
@@ -519,7 +501,7 @@ func (p *clusterNameParser) parse(event backend.Event) (services.Resource, error
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return clusterName, nil
+		return resourcesToEvents(event.Type, clusterName)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
@@ -536,7 +518,7 @@ func newNamespaceParser(name string) *namespaceParser {
 }
 
 type namespaceParser struct {
-	baseParser
+	simpleMatcher
 }
 
 func (p *namespaceParser) match(key []byte) bool {
@@ -547,10 +529,10 @@ func (p *namespaceParser) match(key []byte) bool {
 		bytes.Count(key, []byte{backend.Separator}) == 3
 }
 
-func (p *namespaceParser) parse(event backend.Event) (services.Resource, error) {
+func (p *namespaceParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
-		return resourceHeader(event, services.KindNamespace, services.V2, 1)
+		return resourceHeader(event, services.KindNamespace, services.V2, 1, "")
 	case backend.OpPut:
 		namespace, err := services.UnmarshalNamespace(event.Item.Value,
 			services.WithResourceID(event.Item.ID),
@@ -559,7 +541,7 @@ func (p *namespaceParser) parse(event backend.Event) (services.Resource, error) 
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return namespace, nil
+		return resourcesToEvents(event.Type, namespace)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
@@ -567,18 +549,18 @@ func (p *namespaceParser) parse(event backend.Event) (services.Resource, error) 
 
 func newRoleParser() *roleParser {
 	return &roleParser{
-		baseParser: baseParser{matchPrefix: backend.Key(rolesPrefix)},
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(rolesPrefix)},
 	}
 }
 
 type roleParser struct {
-	baseParser
+	simpleMatcher
 }
 
-func (p *roleParser) parse(event backend.Event) (services.Resource, error) {
+func (p *roleParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
-		return resourceHeader(event, services.KindRole, services.V3, 1)
+		return resourceHeader(event, services.KindRole, services.V3, 1, "")
 	case backend.OpPut:
 		resource, err := services.UnmarshalRole(event.Item.Value,
 			services.WithResourceID(event.Item.ID),
@@ -587,7 +569,7 @@ func (p *roleParser) parse(event backend.Event) (services.Resource, error) {
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return resource, nil
+		return resourcesToEvents(event.Type, resource)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
@@ -625,10 +607,10 @@ func (p *accessRequestParser) match(key []byte) bool {
 	return true
 }
 
-func (p *accessRequestParser) parse(event backend.Event) (services.Resource, error) {
+func (p *accessRequestParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
-		return resourceHeader(event, services.KindAccessRequest, services.V3, 1)
+		return resourceHeader(event, services.KindAccessRequest, services.V3, 1, "")
 	case backend.OpPut:
 		req, err := itemToAccessRequest(event.Item)
 		if err != nil {
@@ -637,7 +619,7 @@ func (p *accessRequestParser) parse(event backend.Event) (services.Resource, err
 		if !p.filter.Match(req) {
 			return nil, nil
 		}
-		return req, nil
+		return resourcesToEvents(event.Type, req)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
@@ -645,12 +627,12 @@ func (p *accessRequestParser) parse(event backend.Event) (services.Resource, err
 
 func newUserParser() *userParser {
 	return &userParser{
-		baseParser: baseParser{matchPrefix: backend.Key(webPrefix, usersPrefix)},
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(webPrefix, usersPrefix)},
 	}
 }
 
 type userParser struct {
-	baseParser
+	simpleMatcher
 }
 
 func (p *userParser) match(key []byte) bool {
@@ -661,10 +643,10 @@ func (p *userParser) match(key []byte) bool {
 		bytes.Count(key, []byte{backend.Separator}) == 4
 }
 
-func (p *userParser) parse(event backend.Event) (services.Resource, error) {
+func (p *userParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
-		return resourceHeader(event, services.KindUser, services.V2, 1)
+		return resourceHeader(event, services.KindUser, services.V2, 1, "")
 	case backend.OpPut:
 		resource, err := services.UnmarshalUser(event.Item.Value,
 			services.WithResourceID(event.Item.ID),
@@ -673,7 +655,7 @@ func (p *userParser) parse(event backend.Event) (services.Resource, error) {
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return resource, nil
+		return resourcesToEvents(event.Type, resource)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
@@ -681,64 +663,64 @@ func (p *userParser) parse(event backend.Event) (services.Resource, error) {
 
 func newNodeParser() *nodeParser {
 	return &nodeParser{
-		baseParser: baseParser{matchPrefix: backend.Key(nodesPrefix, defaults.Namespace)},
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(nodesPrefix, defaults.Namespace)},
 	}
 }
 
 type nodeParser struct {
-	baseParser
+	simpleMatcher
 }
 
-func (p *nodeParser) parse(event backend.Event) (services.Resource, error) {
+func (p *nodeParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	return parseServer(event, services.KindNode)
 }
 
 func newProxyParser() *proxyParser {
 	return &proxyParser{
-		baseParser: baseParser{matchPrefix: backend.Key(proxiesPrefix)},
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(proxiesPrefix)},
 	}
 }
 
 type proxyParser struct {
-	baseParser
+	simpleMatcher
 }
 
-func (p *proxyParser) parse(event backend.Event) (services.Resource, error) {
+func (p *proxyParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	return parseServer(event, services.KindProxy)
 }
 
 func newAuthServerParser() *authServerParser {
 	return &authServerParser{
-		baseParser: baseParser{matchPrefix: backend.Key(authServersPrefix)},
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(authServersPrefix)},
 	}
 }
 
 type authServerParser struct {
-	baseParser
+	simpleMatcher
 }
 
-func (p *authServerParser) parse(event backend.Event) (services.Resource, error) {
+func (p *authServerParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	return parseServer(event, services.KindAuthServer)
 }
 
 func newTunnelConnectionParser() *tunnelConnectionParser {
 	return &tunnelConnectionParser{
-		baseParser: baseParser{matchPrefix: backend.Key(tunnelConnectionsPrefix)},
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(tunnelConnectionsPrefix)},
 	}
 }
 
 type tunnelConnectionParser struct {
-	baseParser
+	simpleMatcher
 }
 
-func (p *tunnelConnectionParser) parse(event backend.Event) (services.Resource, error) {
+func (p *tunnelConnectionParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
 		clusterName, name, err := baseTwoKeys(event.Item.Key)
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return &services.ResourceHeader{
+		return resourcesToEvents(event.Type, &services.ResourceHeader{
 			Kind:    services.KindTunnelConnection,
 			SubKind: clusterName,
 			Version: services.V2,
@@ -746,7 +728,7 @@ func (p *tunnelConnectionParser) parse(event backend.Event) (services.Resource, 
 				Name:      name,
 				Namespace: defaults.Namespace,
 			},
-		}, nil
+		})
 	case backend.OpPut:
 		resource, err := services.UnmarshalTunnelConnection(event.Item.Value,
 			services.WithResourceID(event.Item.ID),
@@ -755,7 +737,7 @@ func (p *tunnelConnectionParser) parse(event backend.Event) (services.Resource, 
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return resource, nil
+		return resourcesToEvents(event.Type, resource)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
@@ -763,18 +745,18 @@ func (p *tunnelConnectionParser) parse(event backend.Event) (services.Resource, 
 
 func newReverseTunnelParser() *reverseTunnelParser {
 	return &reverseTunnelParser{
-		baseParser: baseParser{matchPrefix: backend.Key(reverseTunnelsPrefix)},
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(reverseTunnelsPrefix)},
 	}
 }
 
 type reverseTunnelParser struct {
-	baseParser
+	simpleMatcher
 }
 
-func (p *reverseTunnelParser) parse(event backend.Event) (services.Resource, error) {
+func (p *reverseTunnelParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
-		return resourceHeader(event, services.KindReverseTunnel, services.V2, 0)
+		return resourceHeader(event, services.KindReverseTunnel, services.V2, 0, "")
 	case backend.OpPut:
 		resource, err := services.UnmarshalReverseTunnel(event.Item.Value,
 			services.WithResourceID(event.Item.ID),
@@ -783,7 +765,7 @@ func (p *reverseTunnelParser) parse(event backend.Event) (services.Resource, err
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return resource, nil
+		return resourcesToEvents(event.Type, resource)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
@@ -791,21 +773,21 @@ func (p *reverseTunnelParser) parse(event backend.Event) (services.Resource, err
 
 func newAppServerParser() *appServerParser {
 	return &appServerParser{
-		baseParser: baseParser{matchPrefix: backend.Key(appsPrefix, serversPrefix, defaults.Namespace)},
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(appsPrefix, serversPrefix, defaults.Namespace)},
 	}
 }
 
 type appServerParser struct {
-	baseParser
+	simpleMatcher
 }
 
-func (p *appServerParser) parse(event backend.Event) (services.Resource, error) {
+func (p *appServerParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	return parseServer(event, services.KindAppServer)
 }
 
 func newAppSessionParser() *webSessionParser {
 	return &webSessionParser{
-		baseParser: baseParser{matchPrefix: backend.Key(appsPrefix, sessionsPrefix)},
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(appsPrefix, sessionsPrefix)},
 		hdr: services.ResourceHeader{
 			Kind:    services.KindWebSession,
 			SubKind: services.KindAppSession,
@@ -816,7 +798,7 @@ func newAppSessionParser() *webSessionParser {
 
 func newWebSessionParser() *webSessionParser {
 	return &webSessionParser{
-		baseParser: baseParser{matchPrefix: backend.Key(webPrefix, sessionsPrefix)},
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(webPrefix, sessionsPrefix)},
 		hdr: services.ResourceHeader{
 			Kind:    services.KindWebSession,
 			SubKind: services.KindWebSession,
@@ -826,11 +808,11 @@ func newWebSessionParser() *webSessionParser {
 }
 
 type webSessionParser struct {
-	baseParser
+	simpleMatcher
 	hdr services.ResourceHeader
 }
 
-func (p *webSessionParser) parse(event backend.Event) (services.Resource, error) {
+func (p *webSessionParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
 		return resourceHeaderWithTemplate(event, p.hdr, 0)
@@ -842,7 +824,7 @@ func (p *webSessionParser) parse(event backend.Event) (services.Resource, error)
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return resource, nil
+		return resourcesToEvents(event.Type, resource)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
@@ -850,18 +832,18 @@ func (p *webSessionParser) parse(event backend.Event) (services.Resource, error)
 
 func newWebTokenParser() *webTokenParser {
 	return &webTokenParser{
-		baseParser: baseParser{matchPrefix: backend.Key(webPrefix, tokensPrefix)},
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(webPrefix, tokensPrefix)},
 	}
 }
 
 type webTokenParser struct {
-	baseParser
+	simpleMatcher
 }
 
-func (p *webTokenParser) parse(event backend.Event) (services.Resource, error) {
+func (p *webTokenParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
-		return resourceHeader(event, services.KindWebToken, services.V1, 0)
+		return resourceHeader(event, services.KindWebToken, services.V1, 0, "")
 	case backend.OpPut:
 		resource, err := services.UnmarshalWebToken(event.Item.Value,
 			services.WithResourceID(event.Item.ID),
@@ -870,7 +852,7 @@ func (p *webTokenParser) parse(event backend.Event) (services.Resource, error) {
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return resource, nil
+		return resourcesToEvents(event.Type, resource)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
@@ -878,36 +860,36 @@ func (p *webTokenParser) parse(event backend.Event) (services.Resource, error) {
 
 func newKubeServiceParser() *kubeServiceParser {
 	return &kubeServiceParser{
-		baseParser: baseParser{matchPrefix: backend.Key(kubeServicesPrefix)},
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(kubeServicesPrefix)},
 	}
 }
 
 type kubeServiceParser struct {
-	baseParser
+	simpleMatcher
 }
 
-func (p *kubeServiceParser) parse(event backend.Event) (services.Resource, error) {
+func (p *kubeServiceParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	return parseServer(event, services.KindKubeService)
 }
 
 func newDatabaseServerParser() *databaseServerParser {
 	return &databaseServerParser{
-		baseParser: baseParser{matchPrefix: backend.Key(dbServersPrefix, defaults.Namespace)},
+		simpleMatcher: simpleMatcher{matchPrefix: backend.Key(dbServersPrefix, defaults.Namespace)},
 	}
 }
 
 type databaseServerParser struct {
-	baseParser
+	simpleMatcher
 }
 
-func (p *databaseServerParser) parse(event backend.Event) (services.Resource, error) {
+func (p *databaseServerParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
 		hostID, name, err := baseTwoKeys(event.Item.Key)
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return &types.DatabaseServerV3{
+		return resourcesToEvents(event.Type, &types.DatabaseServerV3{
 			Kind:    types.KindDatabaseServer,
 			Version: types.V3,
 			Metadata: services.Metadata{
@@ -915,22 +897,26 @@ func (p *databaseServerParser) parse(event backend.Event) (services.Resource, er
 				Namespace:   defaults.Namespace,
 				Description: hostID, // Pass host ID via description field for the cache.
 			},
-		}, nil
+		})
 	case backend.OpPut:
-		return services.UnmarshalDatabaseServer(
+		resource, err := services.UnmarshalDatabaseServer(
 			event.Item.Value,
 			services.WithResourceID(event.Item.ID),
 			services.WithExpires(event.Item.Expires),
 			services.SkipValidation())
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		return resourcesToEvents(event.Type, resource)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
 }
 
-func parseServer(event backend.Event, kind string) (services.Resource, error) {
+func parseServer(event backend.Event, kind string) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
-		return resourceHeader(event, kind, services.V2, 0)
+		return resourceHeader(event, kind, services.V2, 0, "")
 	case backend.OpPut:
 		resource, err := services.UnmarshalServer(event.Item.Value,
 			kind,
@@ -941,7 +927,7 @@ func parseServer(event backend.Event, kind string) (services.Resource, error) {
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return resource, nil
+		return resourcesToEvents(event.Type, resource)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
@@ -965,10 +951,10 @@ func (p *remoteClusterParser) match(key []byte) bool {
 	return bytes.HasPrefix(key, p.matchPrefix)
 }
 
-func (p *remoteClusterParser) parse(event backend.Event) (services.Resource, error) {
+func (p *remoteClusterParser) translateMatching(event backend.Event) ([]services.Event, error) {
 	switch event.Type {
 	case backend.OpDelete:
-		return resourceHeader(event, services.KindRemoteCluster, services.V3, 0)
+		return resourceHeader(event, services.KindRemoteCluster, services.V3, 0, "")
 	case backend.OpPut:
 		resource, err := services.UnmarshalRemoteCluster(event.Item.Value,
 			services.WithResourceID(event.Item.ID),
@@ -977,41 +963,66 @@ func (p *remoteClusterParser) parse(event backend.Event) (services.Resource, err
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return resource, nil
+		return resourcesToEvents(event.Type, resource)
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}
+
+	// 	resource, err := b.parseResource(event)
+	// 	if err != nil {
+	// 		return nil, trace.Wrap(err)
+	// 	}
+	// 	// If resource is nil, then it was well-formed but is being filtered out.
+	// 	if resource == nil {
+	// 		return nil, nil
+	// 	}
+	// 	return []services.Event{{Type: event.Type, Resource: resource}}, nil
 }
 
-func resourceHeader(event backend.Event, kind, version string, offset int) (services.Resource, error) {
-	name, err := base(event.Item.Key, offset)
-	if err != nil {
-		return nil, trace.Wrap(err)
+func resourceHeader(event backend.Event, kind, version string, offset int, name string) ([]services.Event, error) {
+	if name == "" {
+		var err error
+		name, err = base(event.Item.Key, offset)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
 	}
-	return &services.ResourceHeader{
+	return resourcesToEvents(event.Type, &services.ResourceHeader{
 		Kind:    kind,
 		Version: version,
 		Metadata: services.Metadata{
-			Name:      string(name),
+			Name:      name,
 			Namespace: defaults.Namespace,
 		},
-	}, nil
+	})
 }
 
-func resourceHeaderWithTemplate(event backend.Event, hdr services.ResourceHeader, offset int) (services.Resource, error) {
+func resourceHeaderWithTemplate(event backend.Event, hdr services.ResourceHeader, offset int) ([]services.Event, error) {
 	name, err := base(event.Item.Key, offset)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	return &services.ResourceHeader{
+	return resourcesToEvents(event.Type, &services.ResourceHeader{
 		Kind:    hdr.Kind,
 		SubKind: hdr.SubKind,
 		Version: hdr.Version,
 		Metadata: services.Metadata{
-			Name:      string(name),
+			Name:      name,
 			Namespace: defaults.Namespace,
 		},
-	}, nil
+	})
+}
+
+func resourcesToEvents(eventType types.OpType, resources ...services.Resource) ([]services.Event, error) {
+	events := []services.Event{}
+	for _, resource := range resources {
+		// If resource is nil, then it was well-formed but is being filtered out.
+		if resource == nil {
+			continue
+		}
+		events = append(events, services.Event{Type: eventType, Resource: resource})
+	}
+	return events, nil
 }
 
 // WaitForEvent waits for the event matched by the specified event matcher in the given watcher.
@@ -1069,12 +1080,12 @@ type EventMatcher interface {
 
 // base returns last element delimited by separator, index is
 // is an index of the key part to get counting from the end
-func base(key []byte, offset int) ([]byte, error) {
+func base(key []byte, offset int) (string, error) {
 	parts := bytes.Split(key, []byte{backend.Separator})
 	if len(parts) < offset+1 {
-		return nil, trace.NotFound("failed parsing %v", string(key))
+		return "", trace.NotFound("failed parsing %v", string(key))
 	}
-	return parts[len(parts)-offset-1], nil
+	return string(parts[len(parts)-offset-1]), nil
 }
 
 // baseTwoKeys returns two last keys
@@ -1085,3 +1096,7 @@ func baseTwoKeys(key []byte) (string, string, error) {
 	}
 	return string(parts[len(parts)-2]), string(parts[len(parts)-1]), nil
 }
+
+// getClusterConfigFunc gets ClusterConfig to facilitate backward compatible
+// transition to standalone configuration resources.  DELETE IN 8.0.0
+type getClusterConfigFunc func(...services.MarshalOption) (services.ClusterConfig, error)

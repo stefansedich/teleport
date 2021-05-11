@@ -1139,19 +1139,6 @@ func CollectOptions(opts ...Option) Options {
 
 // ClusterConfig tests cluster configuration
 func (s *ServicesTestSuite) ClusterConfig(c *check.C, opts ...Option) {
-	config, err := services.NewClusterConfig(services.ClusterConfigSpecV3{
-		DisconnectExpiredCert: services.NewBool(true),
-		ClusterID:             "27",
-		Audit: services.AuditConfig{
-			Region:           "us-west-1",
-			Type:             "dynamodb",
-			AuditSessionsURI: "file:///home/log",
-			AuditTableName:   "audit_table_name",
-			AuditEventsURI:   []string{"dynamodb://audit_table_name", "file:///home/log"},
-		},
-	})
-	c.Assert(err, check.IsNil)
-
 	// DELETE IN 8.0.0
 	netConfig, err := types.NewClusterNetworkingConfig(types.ClusterNetworkingConfigSpecV2{
 		ClientIdleTimeout: services.NewDuration(17 * time.Second),
@@ -1168,14 +1155,27 @@ func (s *ServicesTestSuite) ClusterConfig(c *check.C, opts ...Option) {
 	err = s.ConfigS.SetSessionRecordingConfig(context.TODO(), recConfig)
 	c.Assert(err, check.IsNil)
 
+	config, err := services.NewClusterConfig(services.ClusterConfigSpecV3{
+		DisconnectExpiredCert: services.NewBool(true),
+		ClusterID:             "27",
+		Audit: services.AuditConfig{
+			Region:           "us-west-1",
+			Type:             "dynamodb",
+			AuditSessionsURI: "file:///home/log",
+			AuditTableName:   "audit_table_name",
+			AuditEventsURI:   []string{"dynamodb://audit_table_name", "file:///home/log"},
+		},
+	})
+	c.Assert(err, check.IsNil)
+
 	err = s.ConfigS.SetClusterConfig(config)
 	c.Assert(err, check.IsNil)
 
 	gotConfig, err := s.ConfigS.GetClusterConfig()
 	c.Assert(err, check.IsNil)
 	config.SetResourceID(gotConfig.GetResourceID())
-	config.SetNetworkingConfig(netConfig)
-	config.SetSessionRecordingConfig(recConfig)
+	config.SetNetworkingFields(netConfig)
+	config.SetSessionRecordingFields(recConfig)
 	fixtures.DeepCompare(c, config, gotConfig)
 
 	// Some parts (e.g. auth server) will not function
@@ -1746,6 +1746,14 @@ func (s *ServicesTestSuite) Events(c *check.C) {
 
 // EventsClusterConfig tests cluster config resource events
 func (s *ServicesTestSuite) EventsClusterConfig(c *check.C) {
+	// DELETE IN 8.0.0
+	err := s.ConfigS.SetClusterNetworkingConfig(context.TODO(), types.DefaultClusterNetworkingConfig())
+	c.Assert(err, check.IsNil)
+
+	// DELETE IN 8.0.0
+	err = s.ConfigS.SetSessionRecordingConfig(context.TODO(), types.DefaultSessionRecordingConfig())
+	c.Assert(err, check.IsNil)
+
 	testCases := []eventTest{
 		{
 			name: "Cluster config",
@@ -1762,6 +1770,12 @@ func (s *ServicesTestSuite) EventsClusterConfig(c *check.C) {
 				out, err := s.ConfigS.GetClusterConfig()
 				c.Assert(err, check.IsNil)
 
+				// To ensure backward compatibility the ClusterConfig resource is not
+				// emitted in the same form as it is put into the backend, but instead
+				// the event handler performs an additional get of ClusterConfig from
+				// the backend.  Therefore, do not delete the resource immediately but
+				// give some time for the get operation to succeed.  DELETE IN 8.0.0
+				time.Sleep(time.Second)
 				err = s.ConfigS.DeleteClusterConfig()
 				c.Assert(err, check.IsNil)
 
