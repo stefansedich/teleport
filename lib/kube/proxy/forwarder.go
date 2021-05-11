@@ -171,6 +171,13 @@ func (f *ForwarderConfig) CheckAndSetDefaults() error {
 	if f.Component == "" {
 		f.Component = "kube_forwarder"
 	}
+	switch f.KubeServiceType {
+	case KubeService:
+	case ProxyService:
+	case LegacyProxyService:
+	default:
+		return trace.BadParameter("unknown value for KubeServiceType")
+	}
 	if f.KubeClusterName == "" && f.KubeconfigPath == "" && f.KubeServiceType == LegacyProxyService {
 		// Running without a kubeconfig and explicit k8s cluster name. Use
 		// teleport cluster name instead, to ask kubeutils.GetKubeConfig to
