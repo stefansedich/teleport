@@ -252,7 +252,7 @@ func (s *ClusterConfigurationService) SetClusterConfig(c services.ClusterConfig)
 			return trace.Wrap(err)
 		}
 	} else {
-		netConfig, err := s.GetClusterNetworkingConfig(context.TODO(), services.SkipValidation())
+		netConfig, err := s.GetClusterNetworkingConfig(context.TODO())
 		if err != nil {
 			return trace.Wrap(err)
 		}
