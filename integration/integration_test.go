@@ -364,7 +364,7 @@ func (s *IntSuite) TestAuditOn(c *check.C) {
 			for {
 				select {
 				case <-tickCh:
-					nodesInSite, err := site.GetNodes(ctx, defaults.Namespace, services.SkipValidation())
+					nodesInSite, err := site.GetNodes(ctx, defaults.Namespace)
 					if err != nil && !trace.IsNotFound(err) {
 						return trace.Wrap(err)
 					}
@@ -743,7 +743,7 @@ func (s *IntSuite) TestUUIDBasedProxy(c *check.C) {
 			for {
 				select {
 				case <-tickCh:
-					nodesInSite, err := site.GetNodes(ctx, defaults.Namespace, services.SkipValidation())
+					nodesInSite, err := site.GetNodes(ctx, defaults.Namespace)
 					if err != nil && !trace.IsNotFound(err) {
 						return trace.Wrap(err)
 					}
@@ -1790,7 +1790,7 @@ func (s *IntSuite) TestMapRoles(c *check.C) {
 	// correct nodes that identity aware GetNodes is done in TestList.
 	var nodes []services.Server
 	for i := 0; i < 10; i++ {
-		nodes, err = aux.Process.GetAuthServer().GetNodes(ctx, defaults.Namespace, services.SkipValidation())
+		nodes, err = aux.Process.GetAuthServer().GetNodes(ctx, defaults.Namespace)
 		c.Assert(err, check.IsNil)
 		if len(nodes) != 2 {
 			time.Sleep(100 * time.Millisecond)
@@ -4380,7 +4380,7 @@ func (s *IntSuite) TestList(c *check.C) {
 		for {
 			select {
 			case <-tickCh:
-				nodesInCluster, err := clt.GetNodes(ctx, defaults.Namespace, services.SkipValidation())
+				nodesInCluster, err := clt.GetNodes(ctx, defaults.Namespace)
 				if err != nil && !trace.IsNotFound(err) {
 					return trace.Wrap(err)
 				}
