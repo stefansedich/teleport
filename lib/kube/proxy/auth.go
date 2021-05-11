@@ -79,7 +79,7 @@ func getKubeCreds(ctx context.Context, log logrus.FieldLogger, tpClusterName, ku
 		WithField("kubeconfigPath", kubeconfigPath).
 		WithField("kubeClusterName", kubeClusterName).
 		WithField("serviceType", serviceType).
-		Debug("Reading kubernetes creds.")
+		Debug("Reading Kubernetes creds.")
 
 	// Proxy service should never have creds, forwards to kube service
 	if serviceType == ProxyService {
@@ -96,9 +96,9 @@ func getKubeCreds(ctx context.Context, log logrus.FieldLogger, tpClusterName, ku
 	if trace.IsNotFound(err) || len(cfg.Contexts) == 0 {
 		switch serviceType {
 		case KubeService:
-			return nil, trace.BadParameter("No kubernetes credentials found; kubernetes_service requires either a valid kubeconfig_path or to run inside of a kubernetes pod")
+			return nil, trace.BadParameter("no Kubernetes credentials found; Kubernetes_service requires either a valid kubeconfig_path or to run inside of a Kubernetes pod")
 		case LegacyProxyService:
-			log.Debugf("Could not load kubernetes credentials. This proxy will still handle kubernetes requests for trusted teleport clusters or kubernetes nodes in this teleport cluster")
+			log.Debugf("Could not load Kubernetes credentials. This proxy will still handle Kubernetes requests for trusted teleport clusters or Kubernetes nodes in this teleport cluster")
 		}
 		return map[string]*kubeCreds{}, nil
 	}
@@ -114,7 +114,7 @@ func getKubeCreds(ctx context.Context, log logrus.FieldLogger, tpClusterName, ku
 				tpClusterName: currentContext,
 			}
 		} else {
-			return nil, trace.BadParameter("No Kubernetes current-context found; Kubernetes proxy service requires either a valid kubeconfig_path with a current-context or to run inside of a kubernetes pod")
+			return nil, trace.BadParameter("no Kubernetes current-context found; Kubernetes proxy service requires either a valid kubeconfig_path with a current-context or to run inside of a Kubernetes pod")
 		}
 	}
 
@@ -122,10 +122,10 @@ func getKubeCreds(ctx context.Context, log logrus.FieldLogger, tpClusterName, ku
 	// Convert kubeconfig contexts into kubeCreds.
 	for cluster, clientCfg := range cfg.Contexts {
 		log := log.WithField("cluster", cluster)
-		log.Debug("Checking kubernetes impersonation permissions.")
+		log.Debug("Checking Kubernetes impersonation permissions.")
 		client, err := kubernetes.NewForConfig(clientCfg)
 		if err != nil {
-			return nil, trace.Wrap(err, "failed to generate kubernetes client for cluster %q", cluster)
+			return nil, trace.Wrap(err, "failed to generate Kubernetes client for cluster %q", cluster)
 		}
 		// For each loaded cluster, check impersonation permissions. This
 		// failure is only critical for newKubeService.
@@ -136,7 +136,7 @@ func getKubeCreds(ctx context.Context, log logrus.FieldLogger, tpClusterName, ku
 			if serviceType == KubeService {
 				return nil, trace.Wrap(err)
 			}
-			log.WithError(err).Warning("Failed to test the necessary kubernetes permissions. This teleport instance will still handle kubernetes requests towards other kubernetes clusters")
+			log.WithError(err).Warning("Failed to test the necessary Kubernetes permissions. This teleport instance will still handle Kubernetes requests towards other Kubernetes clusters")
 			// We used to recommend users to set a dummy kubeconfig on root
 			// proxies to get kubernetes support working for leaf clusters:
 			// https://community.goteleport.com/t/enabling-teleport-to-act-as-a-kubernetes-proxy-for-trusted-leaf-clusters/418
@@ -147,7 +147,7 @@ func getKubeCreds(ctx context.Context, log logrus.FieldLogger, tpClusterName, ku
 				log.Info("If this is a proxy and you provided a dummy kubeconfig_path, you can remove it from teleport.yaml to get rid of this warning")
 			}
 		} else {
-			log.Debug("Have all necessary kubernetes impersonation permissions.")
+			log.Debug("Have all necessary Kubernetes impersonation permissions.")
 		}
 
 		targetAddr, err := parseKubeHost(clientCfg.Host)
@@ -163,7 +163,7 @@ func getKubeCreds(ctx context.Context, log logrus.FieldLogger, tpClusterName, ku
 			return nil, trace.Wrap(err, "failed to generate transport config from kubeconfig: %v", err)
 		}
 
-		log.Debug("Initialized kubernetes credentials")
+		log.Debug("Initialized Kubernetes credentials")
 		res[cluster] = &kubeCreds{
 			tlsConfig:       tlsConfig,
 			transportConfig: transportConfig,
@@ -180,7 +180,7 @@ func getKubeCreds(ctx context.Context, log logrus.FieldLogger, tpClusterName, ku
 func parseKubeHost(host string) (string, error) {
 	u, err := url.Parse(host)
 	if err != nil {
-		return "", trace.Wrap(err, "failed to parse kubernetes host: %v", err)
+		return "", trace.Wrap(err, "failed to parse Kubernetes host: %v", err)
 	}
 	if _, _, err := net.SplitHostPort(u.Host); err != nil {
 		// add default HTTPS port
@@ -211,10 +211,10 @@ func checkImpersonationPermissions(ctx context.Context, sarClient authztypes.Sel
 			},
 		}, metav1.CreateOptions{})
 		if err != nil {
-			return trace.Wrap(err, "failed to verify impersonation permissions for kubernetes: %v; this may be due to missing the SelfSubjectAccessReview permission on the ClusterRole used by the proxy; please make sure that proxy has all the necessary permissions: https://goteleport.com/teleport/docs/kubernetes-ssh/#impersonation", err)
+			return trace.Wrap(err, "failed to verify impersonation permissions for Kubernetes: %v; this may be due to missing the SelfSubjectAccessReview permission on the ClusterRole used by the proxy; please make sure that proxy has all the necessary permissions: https://goteleport.com/teleport/docs/kubernetes-ssh/#impersonation", err)
 		}
 		if !resp.Status.Allowed {
-			return trace.AccessDenied("proxy can't impersonate kubernetes %s at the cluster level; please make sure that proxy has all the necessary permissions: https://goteleport.com/teleport/docs/kubernetes-ssh/#impersonation", resource)
+			return trace.AccessDenied("proxy can't impersonate Kubernetes %s at the cluster level; please make sure that proxy has all the necessary permissions: https://goteleport.com/teleport/docs/kubernetes-ssh/#impersonation", resource)
 		}
 	}
 	return nil
