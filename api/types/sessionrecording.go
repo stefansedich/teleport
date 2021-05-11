@@ -42,10 +42,6 @@ type SessionRecordingConfig interface {
 
 	// SetProxyChecksHostKeys sets if the proxy will check host keys.
 	SetProxyChecksHostKeys(bool)
-
-	// CheckAndSetDefaults sets and default values and then
-	// verifies the constraints for SessionRecordingConfig.
-	CheckAndSetDefaults() error
 }
 
 // NewSessionRecordingConfig is a convenience method to create SessionRecordingConfigV2.

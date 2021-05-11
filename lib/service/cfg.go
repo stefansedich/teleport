@@ -490,6 +490,9 @@ type AuthConfig struct {
 	// ClusterConfig stores cluster level configuration.
 	ClusterConfig services.ClusterConfig
 
+	// AuditConfig stores cluster audit configuration.
+	AuditConfig types.ClusterAuditConfig
+
 	// NetworkingConfig stores cluster networking configuration.
 	NetworkingConfig types.ClusterNetworkingConfig
 
@@ -849,6 +852,7 @@ func ApplyDefaults(cfg *Config) {
 	cfg.Auth.StorageConfig.Params = backend.Params{defaults.BackendPath: filepath.Join(cfg.DataDir, defaults.BackendDir)}
 	cfg.Auth.StaticTokens = services.DefaultStaticTokens()
 	cfg.Auth.ClusterConfig = services.DefaultClusterConfig()
+	cfg.Auth.AuditConfig = types.DefaultClusterAuditConfig()
 	cfg.Auth.NetworkingConfig = types.DefaultClusterNetworkingConfig()
 	cfg.Auth.SessionRecordingConfig = types.DefaultSessionRecordingConfig()
 	cfg.Auth.Preference = services.DefaultAuthPreference()

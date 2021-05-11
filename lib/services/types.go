@@ -50,7 +50,6 @@ type (
 	ClusterNameSpecV2                  = types.ClusterNameSpecV2
 	ClusterConfigV3                    = types.ClusterConfigV3
 	ClusterConfigSpecV3                = types.ClusterConfigSpecV3
-	AuditConfig                        = types.AuditConfig
 	Namespace                          = types.Namespace
 	NamespaceSpec                      = types.NamespaceSpec
 	ResetPasswordTokenV3               = types.ResetPasswordTokenV3

@@ -75,6 +75,11 @@ func setupCollections(c *Cache, watches []services.WatchKind) (map[resourceKind]
 				return nil, trace.BadParameter("missing parameter ClusterConfig")
 			}
 			collections[resourceKind] = &clusterConfig{watch: watch, Cache: c}
+		case types.KindClusterAuditConfig:
+			if c.ClusterConfig == nil {
+				return nil, trace.BadParameter("missing parameter ClusterConfig")
+			}
+			collections[resourceKind] = &clusterAuditConfig{watch: watch, Cache: c}
 		case types.KindClusterNetworkingConfig:
 			if c.ClusterConfig == nil {
 				return nil, trace.BadParameter("missing parameter ClusterConfig")
@@ -1760,6 +1765,76 @@ func (c *authPreference) processEvent(ctx context.Context, event services.Event)
 }
 
 func (c *authPreference) watchKind() services.WatchKind {
+	return c.watch
+}
+
+type clusterAuditConfig struct {
+	*Cache
+	watch services.WatchKind
+}
+
+func (c *clusterAuditConfig) erase(ctx context.Context) error {
+	if err := c.clusterConfigCache.DeleteClusterAuditConfig(ctx); err != nil {
+		if !trace.IsNotFound(err) {
+			return trace.Wrap(err)
+		}
+	}
+	return nil
+}
+
+func (c *clusterAuditConfig) fetch(ctx context.Context) (apply func(ctx context.Context) error, err error) {
+	var noConfig bool
+	resource, err := c.ClusterConfig.GetClusterAuditConfig(ctx)
+	if err != nil {
+		if !trace.IsNotFound(err) {
+			return nil, trace.Wrap(err)
+		}
+		noConfig = true
+	}
+	return func(ctx context.Context) error {
+		// either zero or one instance exists, so we either erase or
+		// update, but not both.
+		if noConfig {
+			if err := c.erase(ctx); err != nil {
+				return trace.Wrap(err)
+			}
+			return nil
+		}
+
+		c.setTTL(resource)
+		if err := c.clusterConfigCache.SetClusterAuditConfig(ctx, resource); err != nil {
+			return trace.Wrap(err)
+		}
+		return nil
+	}, nil
+}
+
+func (c *clusterAuditConfig) processEvent(ctx context.Context, event services.Event) error {
+	switch event.Type {
+	case backend.OpDelete:
+		err := c.clusterConfigCache.DeleteClusterAuditConfig(ctx)
+		if err != nil {
+			if !trace.IsNotFound(err) {
+				c.Warningf("Failed to delete resource %v.", err)
+				return trace.Wrap(err)
+			}
+		}
+	case backend.OpPut:
+		resource, ok := event.Resource.(types.ClusterAuditConfig)
+		if !ok {
+			return trace.BadParameter("unexpected type %T", event.Resource)
+		}
+		c.setTTL(resource)
+		if err := c.clusterConfigCache.SetClusterAuditConfig(ctx, resource); err != nil {
+			return trace.Wrap(err)
+		}
+	default:
+		c.Warningf("Skipping unsupported event type %v.", event.Type)
+	}
+	return nil
+}
+
+func (c *clusterAuditConfig) watchKind() services.WatchKind {
 	return c.watch
 }
 

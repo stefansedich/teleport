@@ -68,6 +68,8 @@ func (e *EventsService) NewWatcher(ctx context.Context, watch services.Watch) (s
 			parser = newStaticTokensParser()
 		case services.KindClusterConfig:
 			parser = newClusterConfigParser(e.getClusterConfig)
+		case types.KindClusterAuditConfig:
+			parser = newClusterAuditConfigParser()
 		case types.KindClusterNetworkingConfig:
 			parser = newClusterNetworkingConfigParser()
 		case types.KindClusterAuthPreference:
@@ -368,6 +370,7 @@ func (p *staticTokensParser) parse(event backend.Event) (services.Resource, erro
 func newClusterConfigParser(getClusterConfig getClusterConfigFunc) *clusterConfigParser {
 	prefixes := [][]byte{
 		backend.Key(clusterConfigPrefix, generalPrefix),
+		backend.Key(clusterConfigPrefix, auditPrefix),
 		backend.Key(clusterConfigPrefix, networkingPrefix),
 		backend.Key(clusterConfigPrefix, sessionRecordingPrefix),
 		backend.Key(authPrefix, preferencePrefix, generalPrefix),
@@ -405,6 +408,41 @@ func (p *clusterConfigParser) parse(event backend.Event) (services.Resource, err
 			return nil, trace.Wrap(err)
 		}
 		return clusterConfig, nil
+	default:
+		return nil, trace.BadParameter("event %v is not supported", event.Type)
+	}
+}
+
+func newClusterAuditConfigParser() *clusterAuditConfigParser {
+	return &clusterAuditConfigParser{
+		baseParser: newBaseParser(backend.Key(clusterConfigPrefix, auditPrefix)),
+	}
+}
+
+type clusterAuditConfigParser struct {
+	baseParser
+}
+
+func (p *clusterAuditConfigParser) parse(event backend.Event) (services.Resource, error) {
+	switch event.Type {
+	case backend.OpDelete:
+		h, err := resourceHeader(event, types.KindClusterAuditConfig, services.V2, 0)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		h.SetName(types.MetaNameClusterAuditConfig)
+		return h, nil
+	case backend.OpPut:
+		clusterAuditConfig, err := services.UnmarshalClusterAuditConfig(
+			event.Item.Value,
+			services.WithResourceID(event.Item.ID),
+			services.WithExpires(event.Item.Expires),
+			services.SkipValidation(),
+		)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		return clusterAuditConfig, nil
 	default:
 		return nil, trace.BadParameter("event %v is not supported", event.Type)
 	}

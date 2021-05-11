@@ -1141,6 +1141,16 @@ func CollectOptions(opts ...Option) Options {
 
 // ClusterConfig tests cluster configuration
 func (s *ServicesTestSuite) ClusterConfig(c *check.C, opts ...Option) {
+	auditConfig, err := types.NewClusterAuditConfig(types.ClusterAuditConfigSpecV2{
+		Region:           "us-west-1",
+		Type:             "dynamodb",
+		AuditSessionsURI: "file:///home/log",
+		AuditEventsURI:   []string{"dynamodb://audit_table_name", "file:///home/log"},
+	})
+	c.Assert(err, check.IsNil)
+	err = s.ConfigS.SetClusterAuditConfig(context.TODO(), auditConfig)
+	c.Assert(err, check.IsNil)
+
 	// DELETE IN 8.0.0
 	netConfig, err := types.NewClusterNetworkingConfig(types.ClusterNetworkingConfigSpecV2{
 		ClientIdleTimeout: services.NewDuration(17 * time.Second),
@@ -1167,13 +1177,6 @@ func (s *ServicesTestSuite) ClusterConfig(c *check.C, opts ...Option) {
 
 	config, err := services.NewClusterConfig(services.ClusterConfigSpecV3{
 		ClusterID: "27",
-		Audit: services.AuditConfig{
-			Region:           "us-west-1",
-			Type:             "dynamodb",
-			AuditSessionsURI: "file:///home/log",
-			AuditTableName:   "audit_table_name",
-			AuditEventsURI:   []string{"dynamodb://audit_table_name", "file:///home/log"},
-		},
 	})
 	c.Assert(err, check.IsNil)
 
@@ -1183,6 +1186,7 @@ func (s *ServicesTestSuite) ClusterConfig(c *check.C, opts ...Option) {
 	gotConfig, err := s.ConfigS.GetClusterConfig()
 	c.Assert(err, check.IsNil)
 	config.SetResourceID(gotConfig.GetResourceID())
+	config.SetAuditConfig(auditConfig)
 	config.SetNetworkingFields(netConfig)
 	config.SetSessionRecordingFields(recConfig)
 	config.SetAuthFields(authPref)
@@ -1756,8 +1760,11 @@ func (s *ServicesTestSuite) Events(c *check.C) {
 
 // EventsClusterConfig tests cluster config resource events
 func (s *ServicesTestSuite) EventsClusterConfig(c *check.C) {
+	err := s.ConfigS.SetClusterAuditConfig(context.TODO(), types.DefaultClusterAuditConfig())
+	c.Assert(err, check.IsNil)
+
 	// DELETE IN 8.0.0
-	err := s.ConfigS.SetClusterNetworkingConfig(context.TODO(), types.DefaultClusterNetworkingConfig())
+	err = s.ConfigS.SetClusterNetworkingConfig(context.TODO(), types.DefaultClusterNetworkingConfig())
 	c.Assert(err, check.IsNil)
 
 	// DELETE IN 8.0.0

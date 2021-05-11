@@ -312,8 +312,8 @@ func (s *IntSuite) TestAuditOn(c *check.C) {
 	for _, tt := range tests {
 		comment := check.Commentf(tt.comment)
 		makeConfig := func() (*check.C, []string, []*InstanceSecrets, *service.Config) {
-			clusterConfig, err := services.NewClusterConfig(services.ClusterConfigSpecV3{
-				Audit: services.AuditConfig{AuditSessionsURI: tt.auditSessionsURI},
+			auditConfig, err := types.NewClusterAuditConfig(types.ClusterAuditConfigSpecV2{
+				AuditSessionsURI: tt.auditSessionsURI,
 			})
 			c.Assert(err, check.IsNil, comment)
 
@@ -324,7 +324,7 @@ func (s *IntSuite) TestAuditOn(c *check.C) {
 
 			tconf := s.defaultServiceConfig()
 			tconf.Auth.Enabled = true
-			tconf.Auth.ClusterConfig = clusterConfig
+			tconf.Auth.AuditConfig = auditConfig
 			tconf.Auth.SessionRecordingConfig = recConfig
 			tconf.Proxy.Enabled = true
 			tconf.Proxy.DisableWebService = true

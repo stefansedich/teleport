@@ -38,24 +38,6 @@ func DefaultClusterConfig() ClusterConfig {
 	}
 }
 
-// AuditConfigFromObject returns audit config from interface object
-func AuditConfigFromObject(in interface{}) (*AuditConfig, error) {
-	var cfg AuditConfig
-	if in == nil {
-		return &cfg, nil
-	}
-	if err := utils.ObjectToStruct(in, &cfg); err != nil {
-		return nil, trace.Wrap(err)
-	}
-	return &cfg, nil
-}
-
-// ShouldUploadSessions returns whether audit config
-// instructs server to upload sessions
-func ShouldUploadSessions(a AuditConfig) bool {
-	return a.AuditSessionsURI != ""
-}
-
 // ClusterConfigSpecSchemaTemplate is a template for ClusterConfig schema.
 const ClusterConfigSpecSchemaTemplate = `{
 	"type": "object",
