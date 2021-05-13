@@ -41,6 +41,7 @@ import (
 	"github.com/gravitational/teleport/lib/pam"
 	"github.com/gravitational/teleport/lib/service"
 	"github.com/gravitational/teleport/lib/services"
+	"github.com/gravitational/teleport/lib/srv/regular"
 	"github.com/gravitational/teleport/lib/utils"
 
 	"github.com/gravitational/trace"
@@ -613,6 +614,40 @@ func (u *UniversalSecondFactor) Parse() (services.U2F, error) {
 	return res, nil
 }
 
+// AllowTCPForwarding describes the possible values of the
+// `allow_tcp_forwarding` SSH settings key. Essentially a wrapper around
+// regular.SSHPortForwardingMode to plug it into the YAML parser.
+type AllowTCPForwarding regular.SSHPortForwardingMode
+
+// UnmarshalYAML parses a YAML representation of a SSHPortForwardingMode,
+// failing if the value cannot be converted.
+func (mode *AllowTCPForwarding) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var text string
+	err := unmarshal(&text)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+
+	var value regular.SSHPortForwardingMode
+	switch strings.ToLower(text) {
+	case "yes", "all":
+		value = regular.SSHPortForwardingModeAll
+	case "no":
+		value = regular.SSHPortForwardingModeNone
+	case "local":
+		value = regular.SSHPortForwardingModeLocal
+	default:
+		return trace.BadParameter("Invalid SSH port forwarding mode %q", text)
+	}
+
+	(*mode) = AllowTCPForwarding(value)
+	return nil
+}
+
+func (mode *AllowTCPForwarding) AsForwardingMode() regular.SSHPortForwardingMode {
+	return regular.SSHPortForwardingMode(*mode)
+}
+
 // SSH is 'ssh_service' section of the config file
 type SSH struct {
 	Service               `yaml:",inline"`
@@ -626,6 +661,10 @@ type SSH struct {
 
 	// BPF is used to configure BPF-based auditing for this node.
 	BPF *BPF `yaml:"enhanced_recording,omitempty"`
+
+	// AllowTCPForwarding configures the TCP port forwarding modes that the
+	// server is allowed to offer.
+	AllowTCPForwarding AllowTCPForwarding `yaml:"allow_tcp_forwarding,omitempty"`
 }
 
 // CommandLabel is `command` section of `ssh_service` in the config file
