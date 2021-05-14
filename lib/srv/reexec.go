@@ -165,10 +165,7 @@ func RunCommand() (io.Writer, int, error) {
 		errorWriter = tty
 		err = uacc.Open(c.UaccMetadata.UtmpPath, c.UaccMetadata.WtmpPath, c.Login, c.UaccMetadata.Hostname, c.UaccMetadata.RemoteAddr, tty)
 		if err != nil {
-			// the error is critical and we should fail command execution
-			if !trace.IsAccessDenied(err) && !trace.IsNotFound(err) {
-				return errorWriter, teleport.RemoteCommandFailure, trace.Wrap(err)
-			}
+			// uacc support is best-effort, just disable it and continue
 		} else {
 			uaccEnabled = true
 		}
@@ -245,7 +242,7 @@ func RunCommand() (io.Writer, int, error) {
 
 	if uaccEnabled {
 		uaccErr := uacc.Close(c.UaccMetadata.UtmpPath, c.UaccMetadata.WtmpPath, tty)
-		if uaccErr != nil && !trace.IsAccessDenied(uaccErr) && !trace.IsNotFound(uaccErr) {
+		if uaccErr != nil {
 			return errorWriter, teleport.RemoteCommandFailure, trace.Wrap(uaccErr)
 		}
 	}
