@@ -41,8 +41,6 @@ type ResetPasswordToken interface {
 	GetURL() string
 	// SetURL returns URL
 	SetURL(string)
-	// CheckAndSetDefaults checks and set default values for any missing fields.
-	CheckAndSetDefaults() error
 }
 
 // NewResetPasswordToken creates an instance of ResetPasswordToken.
