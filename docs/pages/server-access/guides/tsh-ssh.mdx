@@ -1,9 +1,7 @@
 ---
-title: Server Access Getting Started Guide
-description: How to use Teleport Server Access with SSH.
+title: How to Use Teleport in a Dedicated SSH Role with tsh
+description: How to use Teleport in a dedicated SSH role with tsh.
 ---
-
-# Teleport SSH
 
 Teleport Server Access provides full SSH capabilities out-of-the-box:
 
@@ -11,18 +9,6 @@ Teleport Server Access provides full SSH capabilities out-of-the-box:
 2. Each Teleport node can be configured into SSH mode (Teleport Node) and run as an enhanced SSH server.
 
 These features can be used without third-party tools (such as OpenSSH) allowing admins to reduce the complexity of their stack. In short, Teleport is a full-fledged SSH server with advanced capabilities no other SSH alternative currently has.
-
-## Introduction to Teleport SSH capabilities
-
-Teleport Server Access provides many great features to manage your servers, sessions, and permissions:
-
-1. **Built-in server authentication**: Teleport Server Access allows full SSH management without third-party dependencies. [Reduce the likelihood of a tool or dependency vulnerability](https://www.cse.usf.edu/~xou/publications/esorics08.pdf) by limiting the number of vendors.
-2. **Teleport Server Access provides full SSH capabilities combined with support for 2FA, OAuth 2.0, Open ID Connect, SAML, and SSO out-of-the-box**.
-3. The Teleport SSH daemon also offers **several advantages over other SSH alternatives** including [cluster introspection](https://goteleport.com/blog/openssh-vs-teleport/), built-in Role-Based Access Control, Two-Factor Authentication, and multi-user sessions.
-4. **Role-Based Access Control (RBAC)**: built-in support for delegating permissions and access by the *Principle of Least Privilege* (POLP).
-5. **A convenient web UI** for easily representing and interacting with resources and user sessions.
-6. **Multi-cluster management through a graphical user interface or API**.
-7. Single and multi-user **session auditing and recording** that can be triggered and sent through defined Events.
 
 <Admonition type="warning" title="Warning">
   The examples below may include the use of the `sudo` keyword to make following each step easier when creating resources from scratch. However, we generally discourage the use of `sudo` in **real-world production environments** per the *Principle of Least Privilege* (POLP). 
@@ -35,9 +21,9 @@ Teleport [Nodes](../../architecture/nodes.mdx) have three modes: *Auth*, *Proxy*
 <Figure
   align="center"
   bordered
-  caption="Example cluster arrangement"
+  caption="Teleport SSH agent forwarding."
 >
-  ![Example cluster arrangement](../../../img/proxy-web.svg)
+  ![Example cluster arrangement](../../../img/server-access/openssh-proxy.2.svg)
 </Figure>
 
 The diagram above demonstrates a common cluster arrangement with three independent nodes acting in a single, dedicated, mode each.
