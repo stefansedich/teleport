@@ -3,15 +3,14 @@ title: How to Use Teleport in a Dedicated SSH Role with tsh
 description: How to use Teleport in a dedicated SSH role with tsh.
 ---
 
-Teleport Server Access provides full SSH capabilities out-of-the-box:
+Teleport Server Access can be used with third-party SSH tools like [OpenSSH](./openssh.mdx). Each Teleport Node can also be configured into a dedicated SSH mode (Node mode) and run as an enhanced SSH server.
 
-1. Teleport's `tsh` combines support for SSH and SCP in one convenient, local, a command-line tool.
-2. Each Teleport node can be configured into SSH mode (Teleport Node) and run as an enhanced SSH server.
+`tsh` is a command line client with support for both SCP and SSH that's used to interact with Teleport Nodes. As such, Teleport admins can choose to use `tsh` alone for SSH-related server access and reduce the complexity of their stack.
 
-These features can be used without third-party tools (such as OpenSSH) allowing admins to reduce the complexity of their stack. In short, Teleport is a full-fledged SSH server with advanced capabilities no other SSH alternative currently has.
+This Guide describes common scenarios one is likely to encounter when using Teleport in such a way.
 
 <Admonition type="warning" title="Warning">
-  The examples below may include the use of the `sudo` keyword to make following each step easier when creating resources from scratch. However, we generally discourage the use of `sudo` in **real-world production environments** per the *Principle of Least Privilege* (POLP). 
+  The examples below may include the use of the `sudo` keyword to make following each step easier when creating resources from scratch. However, we generally discourage the use of `sudo` in real-world production environments per the *Principle of Least Privilege* (POLP). 
 </Admonition>
 
 ## SSH mode and adding an SSH Node to your cluster
@@ -23,10 +22,8 @@ Teleport [Nodes](../../architecture/nodes.mdx) have three modes: *Auth*, *Proxy*
   bordered
   caption="Teleport SSH agent forwarding."
 >
-  ![Example cluster arrangement](../../../img/server-access/openssh-proxy.2.svg)
+  ![Example cluster arrangement](../../../img/server-access/teleport-ssh.svg)
 </Figure>
-
-The diagram above demonstrates a common cluster arrangement with three independent nodes acting in a single, dedicated, mode each.
 
 ### Configuration
 
@@ -46,17 +43,16 @@ To link an SSH Node with an existing `auth.example.com` cluster:
    ```bash
    # Join cluster
    sudo teleport start \
-      --roles=node \
-      --token=/tmp/token \
-      --ca-pin=sha256:c75f8be5b21a5cc1b6f91a71200f30a9a083dfea4fc47ec1c55143ccce8882e4 \
-      --auth-server=172.31.17.124:3025
+     --roles=node \
+     --token=./token.file \
+     --auth-server=tele.example.com:443
    ``` 
 
 3. Run the command above with the correct `auth.example.com` public proxy address on the machine you wish to connect.
 
    - This second machine (and its Node) need not publically exposed (per the best-practice *Bastion pattern*).
 
-4. You should now be able to view both Nodes at: `https://auth.example.com/web/cluster/auth.example.com/nodes` in the Web Interface after logging in with your user `auth-admin`.
+4. You should now be able to view both Nodes in the Teleport Web Interface after logging in with your user.
 
    <Figure
      align="center"
@@ -66,7 +62,7 @@ To link an SSH Node with an existing `auth.example.com` cluster:
      ![Both Nodes in the Web UI](../../../img/server-access/teleport_ui.png)
    </Figure>
 
-## Connect to a cluster using tsh ssh without OpenSSH
+## Connect to a cluster using tsh ssh
 
 Teleport SSH is robust enough that you can do all the things you'd do with OpenSSH, without it.
 
@@ -115,12 +111,12 @@ To connect to a cluster (`auth.example.com`) with public proxy `auth.example.com
 <Tabs>
   <TabItem label="tsh">
     ```bash
-    tsh ssh root@ip-172-31-17-124
+    tsh ssh root@ip-172-31-41-144
     ```
   </TabItem>
   <TabItem label="ssh">
     ```bash
-    ssh -J tele.example.com user@host
+    ssh -J tele.example.com root@ip-172-31-41-144
     ```
   </TabItem>
 </Tabs>
@@ -133,15 +129,9 @@ Teleport Server Access has built-in [session auditing](../../features/enhanced-s
 - Session recording captures each keystroke and command-line output.
 - Multiuser session auditing is also provided out-of-the-box. You can record remote IT sessions and administrative tasks without additional configuration.
 
-<video autoplay loop muted playsinline>
-  <source src="https://goteleport.com/teleport/videos/server-access/replay.mp4" type="video/mp4"/>
-  <source src="https://goteleport.com/teleport/videos/server-access/replay.webm" type="video/webm"/>
-Your browser does not support the video tag.
-</video>
-
 ## Define, approve, and deny access requests
 
-Teleports allows you to define [roles and permissions](../../access-controls/reference.mdx) in line with the best practice *Principle of Least Privilege* (POLP).
+Teleport allows you to define [roles and permissions](../../access-controls/reference.mdx) in line with the best practice *Principle of Least Privilege* (POLP).
 
 Each role is permitted or disallowed to interact with resources in specific ways via allow-rules. For example, a user may be granted super-user authority to manage session events: 
 
@@ -179,7 +169,7 @@ As such, Teleport allows organizations to include complex [access request workfl
 
 Teleport `tctl` ("tea-kettle") has powerful querying and multi-command capabilities to make inspecting and managing a cluster even easier.
 
-1. Execute `sudo tctl nodes ls` to display the Universal Resource Catalog with all queried resources in one view:
+1. Execute `sudo tctl nodes ls` to display the Unified Resource Catalog with all queried resources in one view:
    
    ```bash
    Nodename         UUID                                 Address            Labels                               
