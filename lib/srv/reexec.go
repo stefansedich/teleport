@@ -164,9 +164,8 @@ func RunCommand() (io.Writer, int, error) {
 		}
 		errorWriter = tty
 		err = uacc.Open(c.UaccMetadata.UtmpPath, c.UaccMetadata.WtmpPath, c.Login, c.UaccMetadata.Hostname, c.UaccMetadata.RemoteAddr, tty)
-		if err != nil {
-			// uacc support is best-effort, just disable it and continue
-		} else {
+		// uacc support is best-effort, only enable it if Open is successful
+		if err == nil {
 			uaccEnabled = true
 		}
 	}
