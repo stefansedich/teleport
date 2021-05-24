@@ -1140,7 +1140,7 @@ func CollectOptions(opts ...Option) Options {
 // ClusterConfig tests cluster configuration
 func (s *ServicesTestSuite) ClusterConfig(c *check.C, opts ...Option) {
 	// DELETE IN 8.0.0
-	netConfig, err := types.NewClusterNetworkingConfig(types.ClusterNetworkingConfigSpecV2{
+	netConfig, err := types.NewClusterNetworkingConfigFromConfigFile(types.ClusterNetworkingConfigSpecV2{
 		ClientIdleTimeout: services.NewDuration(17 * time.Second),
 	})
 	c.Assert(err, check.IsNil)
@@ -1219,7 +1219,7 @@ func (s *ServicesTestSuite) ClusterConfig(c *check.C, opts ...Option) {
 
 // ClusterNetworkingConfig tests cluster networking configuration.
 func (s *ServicesTestSuite) ClusterNetworkingConfig(c *check.C) {
-	netConfig, err := types.NewClusterNetworkingConfig(types.ClusterNetworkingConfigSpecV2{
+	netConfig, err := types.NewClusterNetworkingConfigFromConfigFile(types.ClusterNetworkingConfigSpecV2{
 		ClientIdleTimeout: types.NewDuration(17 * time.Second),
 		KeepAliveCountMax: 3000,
 	})

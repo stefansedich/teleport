@@ -499,6 +499,31 @@ func (c *authPrefCollection) writeText(w io.Writer) error {
 	return trace.Wrap(err)
 }
 
+type netConfigCollection struct {
+	netConfigs []types.ClusterNetworkingConfig
+}
+
+func (c *netConfigCollection) resources() (r []services.Resource) {
+	for _, resource := range c.netConfigs {
+		r = append(r, resource)
+	}
+	return r
+}
+
+func (c *netConfigCollection) writeText(w io.Writer) error {
+	t := asciitable.MakeTable([]string{"Client Idle Timeout", "Keep Alive Interval", "Keep Alive Count Max", "Session Control Timeout"})
+	for _, netConfig := range c.netConfigs {
+		t.AddRow([]string{
+			netConfig.GetClientIdleTimeout().String(),
+			netConfig.GetKeepAliveInterval().String(),
+			strconv.FormatInt(netConfig.GetKeepAliveCountMax(), 10),
+			netConfig.GetSessionControlTimeout().String(),
+		})
+	}
+	_, err := t.AsBuffer().WriteTo(w)
+	return trace.Wrap(err)
+}
+
 type dbCollection struct {
 	servers []types.DatabaseServer
 }

@@ -155,6 +155,8 @@ func ParseShortcut(in string) (string, error) {
 		return KindTrustedCluster, nil
 	case KindClusterAuthPreference, "cluster_authentication_preferences", "cap":
 		return KindClusterAuthPreference, nil
+	case types.KindClusterNetworkingConfig, "networking_config", "networking", "net_config":
+		return types.KindClusterNetworkingConfig, nil
 	case KindRemoteCluster, "remote_clusters", "rc", "rcs":
 		return KindRemoteCluster, nil
 	case KindSemaphore, "semaphores", "sem", "sems":
@@ -223,6 +225,9 @@ func (r *Ref) Set(v string) error {
 
 func (r *Ref) String() string {
 	if r.SubKind == "" {
+		if r.Name == "" {
+			return r.Kind
+		}
 		return fmt.Sprintf("%s/%s", r.Kind, r.Name)
 	}
 	return fmt.Sprintf("%s/%s/%s", r.Kind, r.SubKind, r.Name)

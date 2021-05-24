@@ -1166,7 +1166,7 @@ func (s *IntSuite) runDisconnectTest(c *check.C, tc disconnectTestCase) {
 	})
 	c.Assert(err, check.IsNil, comment)
 
-	netConfig, err := types.NewClusterNetworkingConfig(types.ClusterNetworkingConfigSpecV2{
+	netConfig, err := types.NewClusterNetworkingConfigFromConfigFile(types.ClusterNetworkingConfigSpecV2{
 		SessionControlTimeout: services.Duration(tc.sessCtlTimeout),
 	})
 	c.Assert(err, check.IsNil, comment)
