@@ -18,8 +18,9 @@ package services
 
 import (
 	"github.com/gravitational/teleport"
-
+	"github.com/gravitational/teleport/api/types"
 	"github.com/gravitational/teleport/lib/defaults"
+
 	"github.com/pborman/uuid"
 )
 
@@ -55,6 +56,7 @@ func NewPresetEditorRole() Role {
 					NewRule(KindTrustedCluster, RW()),
 					NewRule(KindRemoteCluster, RW()),
 					NewRule(KindToken, RW()),
+					NewRule(types.KindDatabaseCert, RW()),
 				},
 			},
 		},
