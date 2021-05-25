@@ -65,6 +65,10 @@ type GRPCServer struct {
 	server *grpc.Server
 }
 
+func (g *GRPCServer) serverContext() context.Context {
+	return g.AuthServer.closeCtx
+}
+
 // GetServer returns an instance of grpc server
 func (g *GRPCServer) GetServer() (*grpc.Server, error) {
 	if g.server == nil {
@@ -394,6 +398,10 @@ func eventToGRPC(in types.Event) (*proto.Event, error) {
 	case *types.ClusterNetworkingConfigV2:
 		out.Resource = &proto.Event_ClusterNetworkingConfig{
 			ClusterNetworkingConfig: r,
+		}
+	case *types.SessionRecordingConfigV2:
+		out.Resource = &proto.Event_SessionRecordingConfig{
+			SessionRecordingConfig: r,
 		}
 	default:
 		return nil, trace.BadParameter("resource type %T is not supported", in.Resource)
@@ -1479,7 +1487,7 @@ func (g *GRPCServer) AddMFADevice(stream proto.AuthService_AddMFADeviceServer) e
 	if err != nil {
 		return trail.ToGRPC(err)
 	}
-	if err := g.Emitter.EmitAuditEvent(g.Context, &apievents.MFADeviceAdd{
+	if err := g.Emitter.EmitAuditEvent(g.serverContext(), &apievents.MFADeviceAdd{
 		Metadata: apievents.Metadata{
 			Type:        events.MFADeviceAddEvent,
 			Code:        events.MFADeviceAddEventCode,
@@ -1764,7 +1772,7 @@ func (g *GRPCServer) DeleteMFADevice(stream proto.AuthService_DeleteMFADeviceSer
 		if err != nil {
 			return trail.ToGRPC(err)
 		}
-		if err := g.Emitter.EmitAuditEvent(g.Context, &apievents.MFADeviceDelete{
+		if err := g.Emitter.EmitAuditEvent(g.serverContext(), &apievents.MFADeviceDelete{
 			Metadata: apievents.Metadata{
 				Type:        events.MFADeviceDeleteEvent,
 				Code:        events.MFADeviceDeleteEventCode,
@@ -2465,6 +2473,35 @@ func (g *GRPCServer) SetClusterNetworkingConfig(ctx context.Context, netConfig *
 		return nil, trail.ToGRPC(err)
 	}
 	if err = auth.ServerWithRoles.SetClusterNetworkingConfig(ctx, netConfig); err != nil {
+		return nil, trail.ToGRPC(err)
+	}
+	return &empty.Empty{}, nil
+}
+
+// GetSessionRecordingConfig gets session recording configuration.
+func (g *GRPCServer) GetSessionRecordingConfig(ctx context.Context, _ *empty.Empty) (*types.SessionRecordingConfigV2, error) {
+	auth, err := g.authenticate(ctx)
+	if err != nil {
+		return nil, trail.ToGRPC(err)
+	}
+	recConfig, err := auth.ServerWithRoles.GetSessionRecordingConfig(ctx)
+	if err != nil {
+		return nil, trail.ToGRPC(err)
+	}
+	recConfigV2, ok := recConfig.(*types.SessionRecordingConfigV2)
+	if !ok {
+		return nil, trail.ToGRPC(trace.BadParameter("unexpected type %T", recConfig))
+	}
+	return recConfigV2, nil
+}
+
+// SetSessionRecordingConfig sets session recording configuration.
+func (g *GRPCServer) SetSessionRecordingConfig(ctx context.Context, recConfig *types.SessionRecordingConfigV2) (*empty.Empty, error) {
+	auth, err := g.authenticate(ctx)
+	if err != nil {
+		return nil, trail.ToGRPC(err)
+	}
+	if err = auth.ServerWithRoles.SetSessionRecordingConfig(ctx, recConfig); err != nil {
 		return nil, trail.ToGRPC(err)
 	}
 	return &empty.Empty{}, nil
