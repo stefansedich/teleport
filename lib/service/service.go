@@ -65,8 +65,6 @@ import (
 	"github.com/gravitational/teleport/lib/events/dynamoevents"
 	"github.com/gravitational/teleport/lib/events/filesessions"
 	"github.com/gravitational/teleport/lib/events/firestoreevents"
-	"github.com/gravitational/teleport/lib/events/gcssessions"
-	"github.com/gravitational/teleport/lib/events/s3sessions"
 	kubeproxy "github.com/gravitational/teleport/lib/kube/proxy"
 	"github.com/gravitational/teleport/lib/limiter"
 	"github.com/gravitational/teleport/lib/modules"
@@ -859,74 +857,6 @@ func adminCreds() (*int, *int, error) {
 	uid := os.Getuid()
 	gid := teleport.LinuxAdminGID
 	return &uid, &gid, nil
-}
-
-// initUploadHandler initializes upload handler based on the config settings,
-// currently the only upload handler supported is S3
-// the call can return trace.NotFound if no upload handler is setup
-func initUploadHandler(auditConfig services.AuditConfig, dataDir string) (events.MultipartHandler, error) {
-	if auditConfig.AuditSessionsURI == "" {
-		recordsDir := filepath.Join(dataDir, events.RecordsDir)
-		if err := os.MkdirAll(recordsDir, teleport.SharedDirMode); err != nil {
-			return nil, trace.ConvertSystemError(err)
-		}
-		handler, err := filesessions.NewHandler(filesessions.Config{
-			Directory: recordsDir,
-		})
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		wrapper, err := events.NewLegacyHandler(events.LegacyHandlerConfig{
-			Handler: handler,
-			Dir:     dataDir,
-		})
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		return wrapper, nil
-	}
-	uri, err := utils.ParseSessionsURI(auditConfig.AuditSessionsURI)
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-
-	switch uri.Scheme {
-	case teleport.SchemeGCS:
-		config := gcssessions.Config{}
-		if err := config.SetFromURL(uri); err != nil {
-			return nil, trace.Wrap(err)
-		}
-		handler, err := gcssessions.DefaultNewHandler(config)
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		return handler, nil
-	case teleport.SchemeS3:
-		config := s3sessions.Config{}
-		if err := config.SetFromURL(uri, auditConfig.Region); err != nil {
-			return nil, trace.Wrap(err)
-		}
-		handler, err := s3sessions.NewHandler(config)
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		return handler, nil
-	case teleport.SchemeFile:
-		if err := os.MkdirAll(uri.Path, teleport.SharedDirMode); err != nil {
-			return nil, trace.ConvertSystemError(err)
-		}
-		handler, err := filesessions.NewHandler(filesessions.Config{
-			Directory: uri.Path,
-		})
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		return handler, nil
-	default:
-		return nil, trace.BadParameter(
-			"unsupported scheme for audit_sesions_uri: %q, currently supported schemes are %q and %q",
-			uri.Scheme, teleport.SchemeS3, teleport.SchemeFile)
-	}
 }
 
 // initExternalLog initializes external storage, if the storage is not

@@ -574,6 +574,12 @@ message AuditConfig {
     int64 WriteMinCapacity = 12 [ (gogoproto.jsontag) = "write_min_capacity,omitempty" ];
     // WriteTargetValue is the ratio of consumed write to provisioned capacity.
     double WriteTargetValue = 13 [ (gogoproto.jsontag) = "write_target_value,omitempty" ];
+
+    // AuditSessionsLocalKey specifies an encryption key to use when perfroming local
+    // encryption on recorded sessions. Local encryption may not be supported by all
+    // upload handlers.
+    string AuditSessionsLocalKey = 15
+        [ (gogoproto.jsontag) = "audit_sessions_local_key,omitempty" ];
 }
 
 // ClusterNetworkingConfigV2 contains cluster-wide networking configuration.

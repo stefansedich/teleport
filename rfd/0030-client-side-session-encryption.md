@@ -46,11 +46,13 @@ For that reason, and for general simplicity, we will proceed under the assumptio
 
 ### S3 Manager
 
-Client side encryption requires the use of the `EncryptionClient` type to act as the upload and download interface.
+~~Client side encryption requires the use of the `EncryptionClient` type to act as the upload and download interface.
 
 The current session uploader uses the `s3manager` type to manage concurrent uploads, downloads, chunking, retries, etc. The `s3manager` creates its own upload and download clients internally, and does not appear to allow us to substitute the `EncryptionClient`.
 
-This means that the implementation for the encrypted uploader and downloader will have to be more involved than the current handlers that use the `s3manager`.
+This means that the implementation for the encrypted uploader and downloader will have to be more involved than the current handlers that use the `s3manager`.~~
+
+**EDIT:** It _may_ be possible to use the `EncryptionClient` interfaces with the `s3manager` after all. I've not actually tested it yet, though.
 
 ## Design and Implementation
 

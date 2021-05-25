@@ -35,6 +35,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	awssession "github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/s3/s3crypto"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/gravitational/trace"
 	log "github.com/sirupsen/logrus"
@@ -58,6 +59,9 @@ type Config struct {
 	Session *awssession.Session
 	// Credentials if supplied are used in tests
 	Credentials *credentials.Credentials
+
+	// LocalKey is used specify a key used for
+	LocalKey []byte
 }
 
 // SetFromURL sets values on the Config from the supplied URI
@@ -118,6 +122,7 @@ func (s *Config) CheckAndSetDefaults() error {
 		if s.Credentials != nil {
 			sess.Config.Credentials = s.Credentials
 		}
+
 		s.Session = sess
 	}
 	return nil
@@ -128,6 +133,37 @@ func NewHandler(cfg Config) (*Handler, error) {
 	if err := cfg.CheckAndSetDefaults(); err != nil {
 		return nil, trace.Wrap(err)
 	}
+
+	if cfg.LocalKey != nil {
+		//	keyWrapper, err := s3crypto.NewKMSKeyGenerator(kms.New(cfg.Session))
+		var keygen s3crypto.CipherDataGeneratorWithCEKAlg
+
+		keyHandler, err := s3crypto.NewKMSKeyGenerator()
+		client, err := s3crypto.NewEncryptionClientV2(
+			cfg.Session,
+			s3crypto.AESGCMContentCipherBuilderV2())
+	}
+
+	// KeyGenerator keyGenerator = KeyGenerator.getInstance("AES");
+	// keyGenerator.init(256);
+	// // --
+	// 	// generate a symmetric encryption key for testing
+	// 	SecretKey secretKey = keyGenerator.generateKey();
+
+	// 	String s3ObjectKey = "EncryptedContent2.txt";
+	// 	String s3ObjectContent = "This is the 2nd content to encrypt";
+	// // --
+
+	// 	AmazonS3EncryptionV2 s3Encryption = AmazonS3EncryptionClientV2Builder.standard()
+	// 			.withRegion(Regions.DEFAULT_REGION)
+	// 			.withClientConfiguration(new ClientConfiguration())
+	// 			.withCryptoConfiguration(new CryptoConfigurationV2().withCryptoMode(CryptoMode.AuthenticatedEncryption))
+	// 			.withEncryptionMaterialsProvider(new StaticEncryptionMaterialsProvider(new EncryptionMaterials(secretKey)))
+	// 			.build();
+
+	// 	s3Encryption.putObject(bucket_name, s3ObjectKey, s3ObjectContent);
+	// 	System.out.println(s3Encryption.getObjectAsString(bucket_name, s3ObjectKey));
+	// 	s3Encryption.shutdown();
 
 	h := &Handler{
 		Entry: log.WithFields(log.Fields{
