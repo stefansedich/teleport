@@ -2628,19 +2628,50 @@ func (a *ServerWithRoles) SignDatabaseCSR(ctx context.Context, req *proto.Databa
 }
 
 // GenerateDatabaseCert generates a certificate used by a database service
-// to authenticate with the database instance
+// to authenticate with the database instance.
+//
+// This certificate can be requested by:
+//
+//  - Cluster administrator using "tctl auth sign --format=db" command locally
+//    on the auth server to produce a certificate for configuring a self-hosted
+//    database.
+//  - Remote user using "tctl auth sign --format=db" command with a remote
+//    proxy (e.g. Teleport Cloud), as long as they can impersonate system
+//    roles Db or Admin.
+//  - Database service when initiating connection to a database instance to
+//    produce a client certificate.
 func (a *ServerWithRoles) GenerateDatabaseCert(ctx context.Context, req *proto.DatabaseCertRequest) (*proto.DatabaseCertResponse, error) {
-	// This certificate can be requested by:
-	//  - Cluster administrator using "tctl auth sign --format=db" command to
-	//    produce a certificate for configuring a self-hosted database.
-	//  - Remote user using "tctl auth sign --format=db" command with a remote
-	//    proxy (e.g. Teleport Cloud).
-	//  - Database service when initiating connection to a database instance to
-	//    produce a client certificate.
-	if err := a.action(defaults.Namespace, types.KindDatabaseCert, types.VerbCreate); err != nil {
-		return nil, trace.Wrap(err)
+	// Check if this is a local cluster admin, or a datababase service, or a
+	// user that is allowed to impersonate either of those.
+	if !a.hasBuiltinRole(string(types.RoleDatabase)) && !a.hasBuiltinRole(string(types.RoleAdmin)) {
+		if errDatabase := a.canImpersonateBuiltinRole(types.RoleDatabase); errDatabase != nil {
+			if errAdmin := a.canImpersonateBuiltinRole(types.RoleAdmin); errAdmin != nil {
+				log.WithError(trace.NewAggregate(errDatabase, errAdmin)).Warnf(
+					"User %v tried to generate database certificate but is not allowed to impersonate %q or %q system roles.",
+					a.context.User.GetName(), types.RoleDatabase, types.RoleAdmin)
+				return nil, trace.AccessDenied("access denied")
+			}
+		}
 	}
 	return a.authServer.GenerateDatabaseCert(ctx, req)
+}
+
+// canImpersonateBuiltinRole checks if the current user can impersonate the
+// provided system role.
+func (a *ServerWithRoles) canImpersonateBuiltinRole(role types.SystemRole) error {
+	roleCtx, err := NewBuiltinRoleContext(role)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	roleSet, ok := roleCtx.Checker.(BuiltinRoleSet)
+	if !ok {
+		return trace.BadParameter("expected BuiltinRoleSet, got %T", roleCtx.Checker)
+	}
+	err = a.context.Checker.CheckImpersonate(a.context.User, roleCtx.User, roleSet.RoleSet.WithoutImplicit())
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	return nil
 }
 
 // GetAppServers gets all application servers.

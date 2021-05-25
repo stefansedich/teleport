@@ -54,7 +54,6 @@ func getExtendedAdminUserRules(features modules.Features) []Rule {
 		NewRule(KindEvent, RO()),
 		NewRule(KindUser, RW()),
 		NewRule(KindToken, RW()),
-		NewRule(types.KindDatabaseCert, RW()),
 	}
 
 	if features.Cloud {
@@ -1123,6 +1122,17 @@ func (set RoleSet) HasRole(role string) bool {
 		}
 	}
 	return false
+}
+
+// WithoutImplicit returns this role set with default implicit role filtered out.
+func (set RoleSet) WithoutImplicit() (out RoleSet) {
+	for _, r := range set {
+		if r.GetName() == teleport.DefaultImplicitRole {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // AdjustSessionTTL will reduce the requested ttl to lowest max allowed TTL
