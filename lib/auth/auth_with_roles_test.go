@@ -26,12 +26,10 @@ import (
 	"github.com/gravitational/teleport/api/client/proto"
 	"github.com/gravitational/teleport/api/constants"
 	"github.com/gravitational/teleport/api/types"
-	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/tlsca"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	"github.com/gravitational/trace"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,37 +68,45 @@ func TestGenerateDatabaseCert(t *testing.T) {
 	ctx := context.Background()
 	srv := newTestTLSServer(t)
 
-	// This user's role doesn't have "create" permission for "db_cert".
-	userWithoutAccess, _, err := CreateUserAndRole(srv.Auth(), "user-without-access", []string{"role1"})
+	// This user can't impersonate anyone and can't generate database certs.
+	userWithoutAccess, _, err := CreateUserAndRole(srv.Auth(), "user", []string{"role1"})
 	require.NoError(t, err)
 
-	// This user's role has "create" permission for "db_cert".
-	userWithAccess, role, err := CreateUserAndRole(srv.Auth(), "user-with-access", []string{"role2"})
+	// This user can impersonate system role Db.
+	userImpersonateDb, roleDb, err := CreateUserAndRole(srv.Auth(), "user-impersonate-db", []string{"role2"})
 	require.NoError(t, err)
-	role.SetRules(types.Allow, append(role.GetRules(types.Allow), services.NewRule(types.KindDatabaseCert, services.RW())))
-	require.NoError(t, srv.Auth().UpsertRole(ctx, role))
+	roleDb.SetImpersonateConditions(types.Allow, types.ImpersonateConditions{
+		Users: []string{string(types.RoleDatabase)},
+		Roles: []string{string(types.RoleDatabase)},
+	})
+	require.NoError(t, srv.Auth().UpsertRole(ctx, roleDb))
 
-	// Admin user.
-	admin, err := CreateUser(srv.Auth(), "admin", services.NewAdminRole())
+	// This user can impersonate system role Admin.
+	userImpersonateAdmin, roleAdmin, err := CreateUserAndRole(srv.Auth(), "user-impersonate-admin", []string{"role3"})
 	require.NoError(t, err)
+	roleAdmin.SetImpersonateConditions(types.Allow, types.ImpersonateConditions{
+		Users: []string{string(types.RoleAdmin)},
+		Roles: []string{string(types.RoleAdmin)},
+	})
+	require.NoError(t, srv.Auth().UpsertRole(ctx, roleAdmin))
 
 	tests := []struct {
 		desc     string
 		identity TestIdentity
-		err      error
+		err      string
 	}{
 		{
 			desc:     "user can't sign database certs",
 			identity: TestUser(userWithoutAccess.GetName()),
-			err:      trace.AccessDenied(""),
+			err:      "access denied",
 		},
 		{
-			desc:     "user can sign database certs",
-			identity: TestUser(userWithAccess.GetName()),
+			desc:     "user can impersonate Db and sign database certs",
+			identity: TestUser(userImpersonateDb.GetName()),
 		},
 		{
-			desc:     "user with admin role can sign database certs",
-			identity: TestUser(admin.GetName()),
+			desc:     "user can impersonate Admin and sign database certs",
+			identity: TestUser(userImpersonateAdmin.GetName()),
 		},
 		{
 			desc:     "built-in admin can sign database certs",
@@ -124,8 +130,8 @@ func TestGenerateDatabaseCert(t *testing.T) {
 			require.NoError(t, err)
 
 			_, err = client.GenerateDatabaseCert(ctx, &proto.DatabaseCertRequest{CSR: csr})
-			if test.err != nil {
-				require.IsType(t, test.err, err)
+			if test.err != "" {
+				require.EqualError(t, err, test.err)
 			} else {
 				require.NoError(t, err)
 			}

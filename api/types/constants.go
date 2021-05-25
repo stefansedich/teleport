@@ -115,11 +115,6 @@ const (
 	// KindDatabaseServer is a database proxy server resource.
 	KindDatabaseServer = "db_server"
 
-	// KindDatabaseCert is the kind for database certificates cluster admins
-	// produce using "tctl auth sign --format=db" command to configure self-
-	// hosted database servers.
-	KindDatabaseCert = "db_cert"
-
 	// KindToken is a provisioning token resource
 	KindToken = "token"
 
