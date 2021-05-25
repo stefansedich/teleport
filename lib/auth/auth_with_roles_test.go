@@ -18,16 +18,20 @@ package auth
 
 import (
 	"context"
+	"crypto/x509/pkix"
 	"testing"
 	"time"
 
+	"github.com/gravitational/teleport"
 	"github.com/gravitational/teleport/api/client/proto"
 	"github.com/gravitational/teleport/api/constants"
 	"github.com/gravitational/teleport/api/types"
+	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/tlsca"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/gravitational/trace"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,6 +62,75 @@ func TestSSOUserCanReissueCert(t *testing.T) {
 		Expires:   time.Now().Add(time.Hour),
 	})
 	require.NoError(t, err)
+}
+
+// TestGenerateDatabaseCert makes sure users and services with appropriate
+// permissions can generate certificates for self-hosted databases.
+func TestGenerateDatabaseCert(t *testing.T) {
+	ctx := context.Background()
+	srv := newTestTLSServer(t)
+
+	// This user's role doesn't have "create" permission for "db_cert".
+	userWithoutAccess, _, err := CreateUserAndRole(srv.Auth(), "user-without-access", []string{"role1"})
+	require.NoError(t, err)
+
+	// This user's role has "create" permission for "db_cert".
+	userWithAccess, role, err := CreateUserAndRole(srv.Auth(), "user-with-access", []string{"role2"})
+	require.NoError(t, err)
+	role.SetRules(types.Allow, append(role.GetRules(types.Allow), services.NewRule(types.KindDatabaseCert, services.RW())))
+	require.NoError(t, srv.Auth().UpsertRole(ctx, role))
+
+	// Admin user.
+	admin, err := CreateUser(srv.Auth(), "admin", services.NewAdminRole())
+	require.NoError(t, err)
+
+	tests := []struct {
+		desc     string
+		identity TestIdentity
+		err      error
+	}{
+		{
+			desc:     "user can't sign database certs",
+			identity: TestUser(userWithoutAccess.GetName()),
+			err:      trace.AccessDenied(""),
+		},
+		{
+			desc:     "user can sign database certs",
+			identity: TestUser(userWithAccess.GetName()),
+		},
+		{
+			desc:     "user with admin role can sign database certs",
+			identity: TestUser(admin.GetName()),
+		},
+		{
+			desc:     "built-in admin can sign database certs",
+			identity: TestAdmin(),
+		},
+		{
+			desc:     "database service can sign database certs",
+			identity: TestBuiltin(teleport.RoleDatabase),
+		},
+	}
+
+	// Generate CSR once for speed sake.
+	priv, _, err := srv.Auth().GenerateKeyPair("")
+	require.NoError(t, err)
+	csr, err := tlsca.GenerateCertificateRequestPEM(pkix.Name{CommonName: "test"}, priv)
+	require.NoError(t, err)
+
+	for _, test := range tests {
+		t.Run(test.desc, func(t *testing.T) {
+			client, err := srv.NewClient(test.identity)
+			require.NoError(t, err)
+
+			_, err = client.GenerateDatabaseCert(ctx, &proto.DatabaseCertRequest{CSR: csr})
+			if test.err != nil {
+				require.IsType(t, test.err, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 // TestSetAuthPreference tests the dynamic configuration rules described

@@ -2630,11 +2630,15 @@ func (a *ServerWithRoles) SignDatabaseCSR(ctx context.Context, req *proto.Databa
 // GenerateDatabaseCert generates a certificate used by a database service
 // to authenticate with the database instance
 func (a *ServerWithRoles) GenerateDatabaseCert(ctx context.Context, req *proto.DatabaseCertRequest) (*proto.DatabaseCertResponse, error) {
-	// This certificate can be requested only by a database service when
-	// initiating connection to a database instance, or by an admin when
-	// generating certificates for a database instance.
-	if !a.hasBuiltinRole(string(teleport.RoleDatabase)) && !a.hasBuiltinRole(string(teleport.RoleAdmin)) {
-		return nil, trace.AccessDenied("this request can only be executed by a database service or an admin")
+	// This certificate can be requested by:
+	//  - Cluster administrator using "tctl auth sign --format=db" command to
+	//    produce a certificate for configuring a self-hosted database.
+	//  - Remote user using "tctl auth sign --format=db" command with a remote
+	//    proxy (e.g. Teleport Cloud).
+	//  - Database service when initiating connection to a database instance to
+	//    produce a client certificate.
+	if err := a.action(defaults.Namespace, types.KindDatabaseCert, types.VerbCreate); err != nil {
+		return nil, trace.Wrap(err)
 	}
 	return a.authServer.GenerateDatabaseCert(ctx, req)
 }

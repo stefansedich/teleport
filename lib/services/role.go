@@ -54,6 +54,7 @@ func getExtendedAdminUserRules(features modules.Features) []Rule {
 		NewRule(KindEvent, RO()),
 		NewRule(KindUser, RW()),
 		NewRule(KindToken, RW()),
+		NewRule(types.KindDatabaseCert, RW()),
 	}
 
 	if features.Cloud {
